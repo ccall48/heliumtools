@@ -1,6 +1,6 @@
 /**
  * Fetch balance for a single escrow account.
- * Use fetchEscrowBalancesBatched() for bulk fetches to avoid subrequest limits on free tiers (syndica).
+ * Use fetchEscrowBalancesBatched() for bulk fetches to stay within RPC rate limits.
  */
 export async function fetchEscrowBalanceDC(env, escrowAccount) {
   const rpcUrl = env.SOLANA_RPC_URL;
@@ -74,9 +74,9 @@ function isAccountNotFoundError(error) {
  * @param {string[]} escrowAccounts - Array of escrow account addresses
  * @returns {Map<string, number>} Map of escrow address -> balance in DC
  */
-const BATCH_SIZE = 10; // syndica free tier limit
-const BATCH_DELAY_MS = 105; // 100 rps limit. ~95 rps (10 requests per 1050ms)
-const RATE_LIMIT_DELAY_MS = 1000; // longer delay after rate limit errors
+const BATCH_SIZE = 10; // Helius batch limit for non-historical methods
+const BATCH_DELAY_MS = 75; // Helius Business plan: 200 RPS → target ~133 RPS (10 reqs per 75ms)
+const RATE_LIMIT_DELAY_MS = 2000; // back off after 429 errors
 
 export async function fetchEscrowBalancesBatched(env, escrowAccounts) {
   const rpcUrl = env.SOLANA_RPC_URL;
