@@ -6,6 +6,7 @@ import {
   HNT_MINT,
   ENTITY_API_BASE,
 } from "../config.js";
+import { fetchAccount, fetchAsset } from "./common.js";
 
 /**
  * SHA-256 hash using Web Crypto API (available in Cloudflare Workers).
@@ -68,56 +69,6 @@ function parseKeyToAssetAccount(data) {
   );
 
   return { dao, asset };
-}
-
-/**
- * Fetch the keyToAsset account from Solana RPC.
- */
-async function fetchKeyToAssetAccount(env, keyToAssetPDA) {
-  const response = await fetch(env.SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getAccountInfo",
-      params: [
-        keyToAssetPDA.toBase58(),
-        { encoding: "base64" },
-      ],
-    }),
-  });
-
-  const result = await response.json();
-  if (!result.result?.value) {
-    return null;
-  }
-
-  const data = Buffer.from(result.result.value.data[0], "base64");
-  return parseKeyToAssetAccount(data);
-}
-
-/**
- * Fetch compressed NFT asset metadata via DAS API (Helius).
- * Returns owner and compression info.
- */
-async function fetchAssetMetadata(env, assetId) {
-  const response = await fetch(env.SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getAsset",
-      params: { id: assetId.toBase58() },
-    }),
-  });
-
-  const result = await response.json();
-  if (result.error) {
-    throw new Error(`DAS API error: ${result.error.message}`);
-  }
-  return result.result;
 }
 
 /**
@@ -244,16 +195,17 @@ export async function resolveEntityKey(env, entityKey) {
   const keyToAssetPDA = await deriveKeyToAssetPDA(entityKey);
 
   // 2. Fetch the on-chain keyToAsset account
-  const keyToAsset = await fetchKeyToAssetAccount(env, keyToAssetPDA);
-  if (!keyToAsset) {
+  const keyToAssetData = await fetchAccount(env, keyToAssetPDA);
+  if (!keyToAssetData) {
     return null;
   }
+  const keyToAsset = parseKeyToAssetAccount(keyToAssetData);
 
   const keyToAssetKey = keyToAssetPDA.toBase58();
 
   // 3. Fetch DAS metadata and Entity API metadata in parallel
   const [asset, entityApiData] = await Promise.all([
-    fetchAssetMetadata(env, keyToAsset.asset),
+    fetchAsset(env, keyToAsset.asset),
     fetchEntityApiMetadata(keyToAssetKey),
   ]);
 

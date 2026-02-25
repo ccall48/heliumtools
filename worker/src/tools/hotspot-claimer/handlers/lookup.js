@@ -2,16 +2,7 @@ import { jsonResponse } from "../../../lib/response.js";
 import { resolveEntityKey } from "../services/entity.js";
 import { checkIpRateLimit } from "../services/rateLimit.js";
 import { MAX_LOOKUPS_PER_MINUTE } from "../config.js";
-
-/**
- * Validate that a string looks like a plausible entity key (base58 encoded, reasonable length).
- */
-function isValidEntityKey(key) {
-  if (!key || typeof key !== "string") return false;
-  if (key.length < 20 || key.length > 600) return false;
-  // Base58 character set (no 0, O, I, l)
-  return /^[1-9A-HJ-NP-Za-km-z]+$/.test(key);
-}
+import { isValidEntityKey } from "../utils.js";
 
 /**
  * GET /lookup?entityKey=<base58-encoded-entity-key>
@@ -48,7 +39,7 @@ export async function handleLookup(url, env, request) {
 
     return jsonResponse(result);
   } catch (err) {
-    console.error("Lookup error:", err.message);
+    console.error("Lookup error:", err.message, err.stack);
     return jsonResponse({ error: "Failed to resolve hotspot." }, 500);
   }
 }

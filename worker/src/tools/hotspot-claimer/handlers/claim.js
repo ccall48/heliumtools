@@ -2,27 +2,14 @@ import { jsonResponse } from "../../../lib/response.js";
 import { resolveEntityKey } from "../services/entity.js";
 import { getPendingRewards } from "../services/oracle.js";
 import { claimRewardsForToken } from "../services/transaction.js";
+import { checkIpRateLimit } from "../services/rateLimit.js";
 import {
   MAX_CLAIMS_PER_HOTSPOT_HOURS,
   MAX_CLAIMS_PER_DAY_GLOBAL,
   MAX_RECIPIENT_INITS_PER_DAY,
+  MAX_CLAIMS_PER_IP_HOUR,
 } from "../config.js";
-
-/**
- * Validate that a string looks like a plausible entity key.
- */
-function isValidEntityKey(key) {
-  if (!key || typeof key !== "string") return false;
-  if (key.length < 20 || key.length > 600) return false;
-  return /^[1-9A-HJ-NP-Za-km-z]+$/.test(key);
-}
-
-/**
- * Get today's date string in UTC (YYYY-MM-DD).
- */
-function todayUTC() {
-  return new Date().toISOString().slice(0, 10);
-}
+import { isValidEntityKey, todayUTC } from "../utils.js";
 
 /**
  * Check and enforce rate limits. Returns null if OK, or an error response if limited.
@@ -89,6 +76,14 @@ async function recordClaim(env, entityKey, claims) {
  * claim transactions funded by the treasury wallet.
  */
 export async function handleClaim(request, env) {
+  // IP-based rate limit
+  const ipRateLimitError = await checkIpRateLimit(env, request, {
+    prefix: "rl:claim",
+    maxRequests: MAX_CLAIMS_PER_IP_HOUR,
+    windowSeconds: 3600,
+  });
+  if (ipRateLimitError) return ipRateLimitError;
+
   // Parse body
   let body;
   try {
@@ -194,7 +189,7 @@ export async function handleClaim(request, env) {
           explorerUrl: `https://solscan.io/tx/${result.txSignature}`,
         });
       } catch (err) {
-        console.error(`Claim failed for ${tokenKey}:`, err.message);
+        console.error(`Claim failed for ${tokenKey}:`, err.message, err.stack);
         claims.push({
           token: rewardData.label || tokenKey.toUpperCase(),
           error: err.message,

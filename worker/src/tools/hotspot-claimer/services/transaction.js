@@ -7,33 +7,24 @@ import {
   AddressLookupTableAccount,
 } from "@solana/web3.js";
 import bs58 from "bs58";
+import { HELIUM_COMMON_LUT, TOKENS } from "../config.js";
 import {
-  LAZY_DISTRIBUTOR_PROGRAM_ID,
-  REWARDS_ORACLE_PROGRAM_ID,
-  HELIUM_COMMON_LUT,
-  TOKENS,
-} from "../config.js";
-
-// Well-known program IDs
-const SPL_TOKEN_PROGRAM = new PublicKey(
-  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-);
-const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-);
-const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
-const SPL_ACCOUNT_COMPRESSION = new PublicKey(
-  "cmtDvXumGCrqC1Age74AVPhSRVXJMd8PJS91L8KbNCK"
-);
-const SPL_NOOP_PROGRAM = new PublicKey(
-  "noopb9bkMVfRPU8AsBRBV2dZiiXcnXBrEPs4auQs1Q6"
-);
-const CIRCUIT_BREAKER_PROGRAM = new PublicKey(
-  "circAbx64bbsscPbQzZAUvuXpHqrCe6fLMzc2uKXz9g"
-);
-
-const LAZY_DIST_PID = new PublicKey(LAZY_DISTRIBUTOR_PROGRAM_ID);
-const REWARDS_ORACLE_PID = new PublicKey(REWARDS_ORACLE_PROGRAM_ID);
+  LAZY_DIST_PID,
+  REWARDS_ORACLE_PID,
+  SPL_TOKEN_PROGRAM,
+  ASSOCIATED_TOKEN_PROGRAM,
+  SYSTEM_PROGRAM,
+  SPL_ACCOUNT_COMPRESSION,
+  CIRCUIT_BREAKER_PROGRAM,
+  deriveLazyDistributor,
+  deriveRecipient,
+  deriveATA,
+  deriveCircuitBreaker,
+  deriveOracleSigner,
+  fetchAccount,
+  fetchAsset,
+  parseLazyDistributor,
+} from "./common.js";
 
 /**
  * Compute Anchor 8-byte discriminator: sha256("global:<name>")[0..8]
@@ -69,65 +60,6 @@ function encodeDistributeArgs(dataHash, creatorHash, root, index) {
 }
 
 /**
- * Derive ATA address.
- */
-function deriveATA(owner, mint) {
-  const [ata] = PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), SPL_TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
-    ASSOCIATED_TOKEN_PROGRAM
-  );
-  return ata;
-}
-
-/**
- * Derive the oracle signer PDA (from rewards oracle program).
- */
-function deriveOracleSigner() {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("oracle_signer")],
-    REWARDS_ORACLE_PID
-  );
-  return pda;
-}
-
-/**
- * Derive lazy distributor PDA.
- */
-function deriveLazyDistributor(mint) {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("lazy_distributor"), mint.toBuffer()],
-    LAZY_DIST_PID
-  );
-  return pda;
-}
-
-/**
- * Derive recipient PDA.
- */
-function deriveRecipient(lazyDistributor, asset) {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [
-      Buffer.from("recipient"),
-      lazyDistributor.toBuffer(),
-      asset.toBuffer(),
-    ],
-    LAZY_DIST_PID
-  );
-  return pda;
-}
-
-/**
- * Derive circuit breaker PDA.
- */
-function deriveCircuitBreaker(tokenAccount) {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("account_windowed_breaker"), tokenAccount.toBuffer()],
-    CIRCUIT_BREAKER_PROGRAM
-  );
-  return pda;
-}
-
-/**
  * Fetch asset proof from DAS API (Helius).
  */
 async function fetchAssetProof(env, assetId) {
@@ -147,26 +79,7 @@ async function fetchAssetProof(env, assetId) {
 }
 
 /**
- * Fetch asset metadata from DAS API.
- */
-async function fetchAsset(env, assetId) {
-  const resp = await fetch(env.SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getAsset",
-      params: { id: assetId },
-    }),
-  });
-  const data = await resp.json();
-  if (data.error) throw new Error(`getAsset: ${data.error.message}`);
-  return data.result;
-}
-
-/**
- * Fetch Merkle tree canopy depth by reading the account header.
+ * Fetch Merkle tree canopy depth by reading the account data.
  *
  * SPL Concurrent Merkle Tree account layout:
  *   Application header:   2 bytes (version + padding)
@@ -179,54 +92,15 @@ async function fetchAsset(env, assetId) {
  *   changelog:             maxBufferSize * (32 + 4 + maxDepth * 32) bytes
  *   rightmost_proof:       maxDepth * 32 bytes
  *   canopy:                remaining bytes
- *
- * Note: the CMT does NOT store all tree node hashes. Only changelog,
- * rightmost proof, and canopy are stored in the account.
  */
 async function fetchCanopyDepth(env, merkleTreePubkey) {
-  // Fetch header bytes (first 16 bytes) + account length via dataSlice
-  const resp = await fetch(env.SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getAccountInfo",
-      params: [
-        merkleTreePubkey,
-        { encoding: "base64", dataSlice: { offset: 0, length: 16 } },
-      ],
-    }),
-  });
-  const data = await resp.json();
-  if (!data.result?.value) return 0;
-
-  const buf = Buffer.from(data.result.value.data[0], "base64");
-  const accountLength = data.result.value.data[1] === "base64"
-    ? data.result.value.data[0].length * 3 / 4 // approximate, but we need exact
-    : 0;
-
-  // We need the full account length. dataSlice doesn't tell us total size,
-  // so use the account lamports / rent relationship or fetch metadata.
-  // Simpler: use getAccountInfo without dataSlice but only read header.
-  const fullResp = await fetch(env.SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getAccountInfo",
-      params: [merkleTreePubkey, { encoding: "base64" }],
-    }),
-  });
-  const fullData = await fullResp.json();
-  if (!fullData.result?.value) return 0;
-  const fullBuf = Buffer.from(fullData.result.value.data[0], "base64");
+  const buf = await fetchAccount(env, merkleTreePubkey);
+  if (!buf) return 0;
 
   // Parse header
   const headerOffset = 2; // application header
-  const maxBufferSize = fullBuf.readUInt32LE(headerOffset);
-  const maxDepth = fullBuf.readUInt32LE(headerOffset + 4);
+  const maxBufferSize = buf.readUInt32LE(headerOffset);
+  const maxDepth = buf.readUInt32LE(headerOffset + 4);
 
   // Compute canopy from remaining space after header + changelog + rightmost proof
   const CMT_HEADER = 56;
@@ -235,8 +109,8 @@ async function fetchCanopyDepth(env, merkleTreePubkey) {
   const rightmostProof = maxDepth * 32;
   const totalBeforeCanopy = CMT_HEADER + changelog + rightmostProof;
 
-  if (fullBuf.length <= totalBeforeCanopy) return 0;
-  const canopyBytes = fullBuf.length - totalBeforeCanopy;
+  if (buf.length <= totalBeforeCanopy) return 0;
+  const canopyBytes = buf.length - totalBeforeCanopy;
   const canopyNodes = Math.floor(canopyBytes / 32);
   if (canopyNodes <= 0) return 0;
   // A canopy of depth d stores 2^(d+1) - 2 nodes
@@ -249,20 +123,9 @@ async function fetchCanopyDepth(env, merkleTreePubkey) {
  */
 async function fetchLookupTable(env) {
   try {
-    const resp = await fetch(env.SOLANA_RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getAccountInfo",
-        params: [HELIUM_COMMON_LUT, { encoding: "base64" }],
-      }),
-    });
-    const data = await resp.json();
-    if (!data.result?.value) return null;
+    const accountData = await fetchAccount(env, HELIUM_COMMON_LUT);
+    if (!accountData) return null;
 
-    const accountData = Buffer.from(data.result.value.data[0], "base64");
     const state = AddressLookupTableAccount.deserialize(accountData);
     return new AddressLookupTableAccount({
       key: new PublicKey(HELIUM_COMMON_LUT),
@@ -293,19 +156,23 @@ async function getRecentBlockhash(env) {
 }
 
 /**
- * Parse the LazyDistributorV0 to get rewards_escrow.
+ * Parse the payer keypair from environment, with safe error handling.
  */
-function parseRewardsEscrow(accountData) {
-  let offset = 8; // discriminator
-  offset += 2; // version
-  offset += 32; // rewards_mint
-  const escrow = new PublicKey(accountData.slice(offset, offset + 32));
-  return escrow;
+function parsePayerKeypair(env) {
+  try {
+    const rawKey = env.HOTSPOT_CLAIM_PAYER_WALLET_PRIVATE_KEY;
+    const secretKey = rawKey.startsWith("[")
+      ? Uint8Array.from(JSON.parse(rawKey))
+      : bs58.decode(rawKey);
+    return Keypair.fromSecretKey(secretKey);
+  } catch {
+    throw new Error("Claim service configuration error");
+  }
 }
 
 /**
  * Build and broadcast a claim transaction for a single token.
- * Returns { txSignature, amount } on success.
+ * Returns { txSignature, token, decimals } on success.
  */
 export async function claimRewardsForToken(
   env,
@@ -332,32 +199,14 @@ export async function claimRewardsForToken(
   const recipient = deriveRecipient(lazyDistributor, assetPk);
   const oracleSigner = deriveOracleSigner();
 
-  // Fetch the lazy distributor account to get rewards_escrow
-  const ldResp = await fetch(env.SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getAccountInfo",
-      params: [lazyDistributor.toBase58(), { encoding: "base64" }],
-    }),
-  });
-  const ldData = await ldResp.json();
-  const ldBuf = Buffer.from(ldData.result.value.data[0], "base64");
-  const rewardsEscrow = parseRewardsEscrow(ldBuf);
-  const circuitBreaker = deriveCircuitBreaker(rewardsEscrow);
+  // Fetch the lazy distributor account for escrow and oracle URLs
+  const ldBuf = await fetchAccount(env, lazyDistributor);
+  if (!ldBuf) throw new Error("Lazy distributor account not found");
+  const ld = parseLazyDistributor(ldBuf);
+  const circuitBreaker = deriveCircuitBreaker(ld.rewardsEscrow);
   const destinationATA = deriveATA(rewardRecipientPk, mint);
 
-  // Get payer keypair from env (supports both JSON byte array and base58 formats)
-  const rawKey = env.HOTSPOT_CLAIM_PAYER_WALLET_PRIVATE_KEY;
-  let secretKey;
-  if (rawKey.startsWith("[")) {
-    secretKey = Uint8Array.from(JSON.parse(rawKey));
-  } else {
-    secretKey = bs58.decode(rawKey);
-  }
-  const payerKeypair = Keypair.fromSecretKey(secretKey);
+  const payerKeypair = parsePayerKeypair(env);
 
   // Build setCurrentRewardsWrapperV1 instructions (one per oracle)
   const setRewardsDiscriminator = await anchorDiscriminator(
@@ -384,20 +233,20 @@ export async function claimRewardsForToken(
   });
 
   // Fetch compression data (needed for both init and distribute in standard path)
-  let asset, assetProof, merkleTree, canopyDepth, trimmedProof;
-  let dataHash, creatorHash, root, leafIndex, proofAccounts;
+  let merkleTree, proofAccounts;
+  let dataHash, creatorHash, root, leafIndex;
 
   const needsCompressionData = !destination;
   if (needsCompressionData) {
-    [asset, assetProof] = await Promise.all([
+    const [asset, assetProof] = await Promise.all([
       fetchAsset(env, assetId),
       fetchAssetProof(env, assetId),
     ]);
 
     merkleTree = new PublicKey(assetProof.tree_id);
-    canopyDepth = await fetchCanopyDepth(env, merkleTree.toBase58());
+    const canopyDepth = await fetchCanopyDepth(env, merkleTree.toBase58());
     const proof = assetProof.proof || [];
-    trimmedProof = proof.slice(0, Math.max(0, proof.length - canopyDepth));
+    const trimmedProof = proof.slice(0, Math.max(0, proof.length - canopyDepth));
 
     dataHash = Buffer.from(
       asset.compression.data_hash.startsWith("0x")
@@ -460,7 +309,7 @@ export async function claimRewardsForToken(
         { pubkey: lazyDistributor, isSigner: false, isWritable: false },
         { pubkey: recipient, isSigner: false, isWritable: true },
         { pubkey: mint, isSigner: false, isWritable: false },
-        { pubkey: rewardsEscrow, isSigner: false, isWritable: true },
+        { pubkey: ld.rewardsEscrow, isSigner: false, isWritable: true },
         { pubkey: circuitBreaker, isSigner: false, isWritable: true },
         { pubkey: rewardRecipientPk, isSigner: false, isWritable: true },
         { pubkey: destinationATA, isSigner: false, isWritable: true },
@@ -488,7 +337,7 @@ export async function claimRewardsForToken(
         { pubkey: lazyDistributor, isSigner: false, isWritable: false },
         { pubkey: recipient, isSigner: false, isWritable: true },
         { pubkey: mint, isSigner: false, isWritable: false },
-        { pubkey: rewardsEscrow, isSigner: false, isWritable: true },
+        { pubkey: ld.rewardsEscrow, isSigner: false, isWritable: true },
         { pubkey: circuitBreaker, isSigner: false, isWritable: true },
         { pubkey: ownerPk, isSigner: false, isWritable: true },
         { pubkey: destinationATA, isSigner: false, isWritable: true },
@@ -526,26 +375,13 @@ export async function claimRewardsForToken(
 
   const tx = new VersionedTransaction(messageV0);
 
-  // Get oracle URLs from the lazy distributor data
-  // We already parsed oracle configs in the rewards step, but the oracle
-  // URLs were passed through oracleRewards. Let's re-fetch them.
-  let offset = 8 + 2 + 32 + 32 + 32; // disc + version + mints + escrow + authority
-  const oracleCount = ldBuf.readUInt32LE(offset);
-  offset += 4;
-  const oracleUrls = [];
-  for (let i = 0; i < oracleCount; i++) {
-    offset += 32; // oracle pubkey
-    const urlLen = ldBuf.readUInt32LE(offset);
-    offset += 4;
-    const url = ldBuf.slice(offset, offset + urlLen).toString("utf-8");
-    offset += urlLen;
-    oracleUrls.push(url);
-  }
+  // Capture the original message for post-oracle verification
+  const originalMessage = Buffer.from(tx.message.serialize());
 
   // Send to each oracle for signing
   let serializedTx = Buffer.from(tx.serialize());
 
-  for (const oracleUrl of oracleUrls) {
+  for (const { url: oracleUrl } of ld.oracles) {
     const resp = await fetch(oracleUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -563,15 +399,12 @@ export async function claimRewardsForToken(
     serializedTx = Buffer.from(result.transaction);
   }
 
-  // Deserialize the oracle-signed transaction
+  // Deserialize the oracle-signed transaction and verify integrity
   const signedTx = VersionedTransaction.deserialize(serializedTx);
 
-  // Verify oracle didn't inject extra instructions
-  if (
-    signedTx.message.compiledInstructions.length !==
-    tx.message.compiledInstructions.length
-  ) {
-    throw new Error("Oracle tampered with transaction instructions");
+  const returnedMessage = Buffer.from(signedTx.message.serialize());
+  if (!originalMessage.equals(returnedMessage)) {
+    throw new Error("Oracle tampered with transaction message");
   }
 
   // Add our payer signature
@@ -603,8 +436,7 @@ export async function claimRewardsForToken(
 
   const sendData = await sendResp.json();
   if (sendData.error) {
-    // Try to get simulation logs for more detail
-    // Simulate to get detailed error logs
+    // Simulate to get detailed error logs (best-effort for debugging)
     try {
       const simResp = await fetch(sendRpcUrl, {
         method: "POST",

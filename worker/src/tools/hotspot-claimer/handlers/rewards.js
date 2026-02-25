@@ -3,15 +3,7 @@ import { resolveEntityKey } from "../services/entity.js";
 import { getPendingRewards } from "../services/oracle.js";
 import { checkIpRateLimit } from "../services/rateLimit.js";
 import { MAX_LOOKUPS_PER_MINUTE, MAX_CLAIMS_PER_HOTSPOT_HOURS, MAX_RECIPIENT_INITS_PER_DAY } from "../config.js";
-
-/**
- * Validate that a string looks like a plausible entity key.
- */
-function isValidEntityKey(key) {
-  if (!key || typeof key !== "string") return false;
-  if (key.length < 20 || key.length > 600) return false;
-  return /^[1-9A-HJ-NP-Za-km-z]+$/.test(key);
-}
+import { isValidEntityKey, todayUTC } from "../utils.js";
 
 /**
  * GET /rewards?entityKey=<base58-encoded-entity-key>
@@ -51,8 +43,7 @@ export async function handleRewards(url, env, request) {
     const rewards = await getPendingRewards(env, hotspot.assetId, hotspot.owner);
 
     // Check if recipient inits are available today
-    const today = new Date().toISOString().slice(0, 10);
-    const initKey = `claims:inits:${today}`;
+    const initKey = `claims:inits:${todayUTC()}`;
     const initsToday = parseInt((await env.KV.get(initKey)) || "0", 10);
     const initsAvailable = initsToday < MAX_RECIPIENT_INITS_PER_DAY;
 

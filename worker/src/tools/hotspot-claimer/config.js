@@ -32,4 +32,5 @@ export const ENTITY_API_BASE = "https://entities.nft.helium.io";
 export const MAX_CLAIMS_PER_HOTSPOT_HOURS = 24;
 export const MAX_CLAIMS_PER_DAY_GLOBAL = 100;
 export const MAX_LOOKUPS_PER_MINUTE = 30;
+export const MAX_CLAIMS_PER_IP_HOUR = 10;
 export const MAX_RECIPIENT_INITS_PER_DAY = 1;
