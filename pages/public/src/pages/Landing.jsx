@@ -1,4 +1,4 @@
-import { ArrowRightIcon, BellAlertIcon, ArrowPathIcon, BanknotesIcon } from "@heroicons/react/24/outline";
+import { ArrowRightIcon, BellAlertIcon, ArrowPathIcon, BanknotesIcon, GiftIcon } from "@heroicons/react/24/outline";
 import Header from "../components/Header.jsx";
 
 const features = [
@@ -15,6 +15,14 @@ const features = [
     href: "/l1-migration",
     icon: ArrowPathIcon,
     badge: null,
+  },
+  {
+    name: "Claim Hotspot Rewards",
+    description:
+      "Look up any Hotspot by its entity key, view pending IOT, MOBILE, or HNT rewards, and claim them in one click.",
+    href: "/hotspot-claimer",
+    icon: GiftIcon,
+    badge: "New",
   },
   {
     name: "Buy Data Credits",
