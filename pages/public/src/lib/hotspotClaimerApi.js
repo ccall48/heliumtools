@@ -44,3 +44,13 @@ export async function claimRewards(entityKey) {
   }
   return data;
 }
+
+export async function fetchWalletHotspots(address) {
+  const query = new URLSearchParams({ address });
+  const res = await fetch(`${API_BASE}/wallet?${query.toString()}`);
+  const data = await parseJson(res);
+  if (!res.ok) {
+    throw new Error(data?.error || "Unable to fetch wallet hotspots");
+  }
+  return data;
+}

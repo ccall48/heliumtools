@@ -2,6 +2,7 @@ import { corsHeaders, jsonResponse } from "../../lib/response.js";
 import { handleLookup } from "./handlers/lookup.js";
 import { handleRewards } from "./handlers/rewards.js";
 import { handleClaim } from "./handlers/claim.js";
+import { handleWallet } from "./handlers/wallet.js";
 
 export async function handleHotspotClaimerRequest(request, env, ctx) {
   const url = new URL(request.url);
@@ -22,6 +23,10 @@ export async function handleHotspotClaimerRequest(request, env, ctx) {
 
   if (pathname === "/claim" && request.method === "POST") {
     return handleClaim(request, env);
+  }
+
+  if (pathname === "/wallet" && request.method === "GET") {
+    return handleWallet(url, env, request);
   }
 
   return jsonResponse({ error: "Not found" }, 404);
