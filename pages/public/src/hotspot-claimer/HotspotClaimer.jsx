@@ -1348,6 +1348,9 @@ export default function HotspotClaimer() {
             permissionless claim transactions. Rewards are sent to the
             designated recipient.
           </p>
+          <p className="text-xs text-slate-400 mt-1">
+            This tool is provided for demonstration purposes. Rate limits are applied.
+          </p>
         </div>
 
         <TabToggle mode={mode} onChange={setMode} />
