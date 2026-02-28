@@ -220,7 +220,7 @@ export async function claimRewardsForToken(
     return new TransactionInstruction({
       programId: REWARDS_ORACLE_PID,
       keys: [
-        { pubkey: oracleKey, isSigner: true, isWritable: false },
+        { pubkey: oracleKey, isSigner: true, isWritable: true },
         { pubkey: lazyDistributor, isSigner: false, isWritable: false },
         { pubkey: recipient, isSigner: false, isWritable: true },
         { pubkey: keyToAssetPk, isSigner: false, isWritable: false },
@@ -454,8 +454,7 @@ export async function claimRewardsForToken(
       });
       const simData = await simResp.json();
       const logs = simData.result?.value?.logs || [];
-      const errorLog = logs.find((l) => l.includes("Error") || l.includes("failed"));
-      if (errorLog) console.error("Sim detail:", errorLog);
+      console.error("Sim logs:", JSON.stringify(logs));
     } catch {
       // Simulation is best-effort for debugging
     }
