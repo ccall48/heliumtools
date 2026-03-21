@@ -11,14 +11,13 @@ import {
   truncateString,
   formatDuration,
   formatTimeAgo,
-  titleCase,
 } from "../lib/utils.js";
 import animalHash from "angry-purple-tiger";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
 
 function gatewayName(publicKey) {
   if (!publicKey) return null;
-  return titleCase(animalHash(publicKey));
+  return animalHash(publicKey);
 }
 
 // ---------------------------------------------------------------------------
