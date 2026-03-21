@@ -489,12 +489,6 @@ export default function MultiGateway() {
   const { gateways, summary, sseStatus, latestPacket } = useMultiGateway();
   const [selectedMac, setSelectedMac] = useState(null);
 
-  // Auto-select the first gateway so the packet panel is visible by default
-  useEffect(() => {
-    if (!selectedMac && gateways.length > 0) {
-      setSelectedMac(gateways[0].mac);
-    }
-  }, [gateways, selectedMac]);
 
   return (
     <div className="min-h-screen bg-surface">
