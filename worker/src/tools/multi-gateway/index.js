@@ -5,7 +5,19 @@ const REGIONS = [
   { region: "EU868", port: 4469 },
 ];
 
-const HOST = "hotspot.heliumtools.org";
+function getHost(env) {
+  return env.MULTI_GATEWAY_HOST || "hotspot.heliumtools.org";
+}
+
+async function fetchUpstream(url, headers) {
+  const res = await fetch(url, { headers });
+  const text = await res.text();
+  try {
+    return { ok: res.ok, status: res.status, data: JSON.parse(text) };
+  } catch {
+    return { ok: false, status: res.status, data: { error: "Upstream returned non-JSON response" } };
+  }
+}
 
 export async function handleMultiGatewayRequest(request, env, ctx) {
   const url = new URL(request.url);
@@ -15,14 +27,18 @@ export async function handleMultiGatewayRequest(request, env, ctx) {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  const headers = { "X-API-Key": env.MULTI_GATEWAY_API_KEY };
+  const apiKey = env.MULTI_GATEWAY_API_KEY;
+  if (!apiKey) {
+    return jsonResponse({ error: "Multi-gateway API is not configured" }, 500);
+  }
+
+  const host = getHost(env);
+  const headers = { "X-API-Key": apiKey };
 
   if (pathname === "/gateways" && request.method === "GET") {
     const results = await Promise.allSettled(
       REGIONS.map(({ port }) =>
-        fetch(`http://${HOST}:${port}/gateways`, { headers }).then((r) =>
-          r.json(),
-        ),
+        fetchUpstream(`http://${host}:${port}/gateways`, headers),
       ),
     );
 
@@ -31,10 +47,11 @@ export async function handleMultiGatewayRequest(request, env, ctx) {
     let connected = 0;
 
     for (const result of results) {
-      if (result.status === "fulfilled" && result.value) {
-        gateways = gateways.concat(result.value.gateways || []);
-        total += result.value.total || 0;
-        connected += result.value.connected || 0;
+      if (result.status === "fulfilled" && result.value.ok) {
+        const v = result.value.data;
+        gateways = gateways.concat(v.gateways || []);
+        total += v.total || 0;
+        connected += v.connected || 0;
       }
     }
 
@@ -47,12 +64,12 @@ export async function handleMultiGatewayRequest(request, env, ctx) {
   if (packetsMatch && request.method === "GET") {
     const mac = packetsMatch[1];
     for (const { port } of REGIONS) {
-      const res = await fetch(`http://${HOST}:${port}/gateways/${mac}/packets`, {
+      const result = await fetchUpstream(
+        `http://${host}:${port}/gateways/${mac}/packets`,
         headers,
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return jsonResponse(data);
+      );
+      if (result.ok) {
+        return jsonResponse(result.data);
       }
     }
     return jsonResponse({ error: "Gateway not found" }, 404);

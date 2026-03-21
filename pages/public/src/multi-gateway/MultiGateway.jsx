@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Header from "../components/Header.jsx";
 import StatusBanner from "../components/StatusBanner.jsx";
 import CopyButton from "../components/CopyButton.jsx";
@@ -42,16 +42,31 @@ function truncateKey(key) {
 
 function useMultiGateway() {
   const [gateways, setGateways] = useState([]);
-  const [summary, setSummary] = useState({ total: 0, connected: 0 });
   const [sseStatus, setSseStatus] = useState("connecting");
-  const esRef = useRef(null);
+  const [tick, setTick] = useState(0);
 
-  // initial load
+  // Tick every 5s to keep relative timestamps fresh
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Initial load — convert API seconds to absolute timestamps
   useEffect(() => {
     fetchGateways()
       .then((data) => {
-        setGateways(data.gateways);
-        setSummary({ total: data.total, connected: data.connected });
+        const now = Date.now();
+        setGateways(
+          data.gateways.map((g) => ({
+            ...g,
+            connected_at: g.connected
+              ? now - (g.connected_seconds || 0) * 1000
+              : null,
+            last_uplink_at: g.last_uplink_seconds_ago != null
+              ? now - g.last_uplink_seconds_ago * 1000
+              : null,
+          })),
+        );
       })
       .catch((err) => console.error("Failed to fetch gateways:", err));
   }, []);
@@ -59,12 +74,11 @@ function useMultiGateway() {
   // SSE connections (one per region)
   useEffect(() => {
     const sources = createEventSources();
-    esRef.current = sources;
 
-    let connectedCount = 0;
+    let openCount = 0;
     const handleOpen = () => {
-      connectedCount++;
-      if (connectedCount === sources.length) setSseStatus("connected");
+      openCount++;
+      if (openCount === sources.length) setSseStatus("connected");
     };
     const handleError = () => setSseStatus("reconnecting");
 
@@ -74,14 +88,14 @@ function useMultiGateway() {
         switch (data.type) {
           case "gateway_connect":
             setGateways((prev) => {
-              const exists = prev.find((g) => g.mac === data.mac);
-              if (exists) {
+              const existing = prev.find((g) => g.mac === data.mac);
+              if (existing) {
                 return prev.map((g) =>
                   g.mac === data.mac
                     ? {
                         ...g,
                         connected: true,
-                        connected_seconds: 0,
+                        connected_at: Date.now(),
                         region: data.region,
                       }
                     : g,
@@ -94,26 +108,23 @@ function useMultiGateway() {
                   public_key: "",
                   region: data.region || "",
                   connected: true,
-                  connected_seconds: 0,
-                  last_uplink_seconds_ago: null,
+                  connected_at: Date.now(),
+                  last_uplink_at: null,
                   uplink_count: 0,
                   downlink_count: 0,
                 },
               ];
             });
-            setSummary((s) => ({ ...s, connected: s.connected + 1 }));
             break;
 
           case "gateway_disconnect":
             setGateways((prev) =>
               prev.map((g) =>
-                g.mac === data.mac ? { ...g, connected: false } : g,
+                g.mac === data.mac
+                  ? { ...g, connected: false, connected_at: null }
+                  : g,
               ),
             );
-            setSummary((s) => ({
-              ...s,
-              connected: Math.max(0, s.connected - 1),
-            }));
             break;
 
           case "uplink":
@@ -123,7 +134,7 @@ function useMultiGateway() {
                   ? {
                       ...g,
                       uplink_count: (g.uplink_count || 0) + 1,
-                      last_uplink_seconds_ago: 0,
+                      last_uplink_at: Date.now(),
                     }
                   : g,
               ),
@@ -153,6 +164,25 @@ function useMultiGateway() {
 
     return () => sources.forEach((es) => es.close());
   }, []);
+
+  // Memoize derived counts so they are only recomputed when gateways changes,
+  // not on every tick-driven re-render.
+  const summary = useMemo(() => {
+    let connected = 0;
+    let totalUplinks = 0;
+    let totalDownlinks = 0;
+    for (const g of gateways) {
+      if (g.connected) connected++;
+      totalUplinks += g.uplink_count || 0;
+      totalDownlinks += g.downlink_count || 0;
+    }
+    return {
+      total: gateways.length,
+      connected,
+      totalUplinks,
+      totalDownlinks,
+    };
+  }, [gateways]);
 
   return { gateways, summary, sseStatus };
 }
@@ -299,13 +329,15 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right text-content-secondary">
-                  {gw.connected
-                    ? formatDuration(gw.connected_seconds)
+                  {gw.connected && gw.connected_at
+                    ? formatDuration(
+                        Math.floor((Date.now() - gw.connected_at) / 1000),
+                      )
                     : "Offline"}
                 </td>
                 <td className="px-4 py-3 text-right text-content-secondary">
-                  {gw.last_uplink_seconds_ago != null
-                    ? `${gw.last_uplink_seconds_ago}s ago`
+                  {gw.last_uplink_at
+                    ? `${Math.floor((Date.now() - gw.last_uplink_at) / 1000)}s ago`
                     : "-"}
                 </td>
                 <td className="px-4 py-3 text-right font-mono text-xs text-content-secondary">
@@ -326,6 +358,7 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
 function GatewayDetail({ mac, onClose }) {
   const [packets, setPackets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const reversedPackets = useMemo(() => [...packets].reverse(), [packets]);
 
   useEffect(() => {
     setLoading(true);
@@ -374,7 +407,7 @@ function GatewayDetail({ mac, onClose }) {
               </tr>
             </thead>
             <tbody>
-              {[...packets].reverse().map((pkt, i) => (
+              {reversedPackets.map((pkt, i) => (
                 <tr
                   key={i}
                   className="border-t border-border-muted text-content-secondary"
@@ -415,15 +448,6 @@ export default function MultiGateway() {
   const { gateways, summary, sseStatus } = useMultiGateway();
   const [selectedMac, setSelectedMac] = useState(null);
 
-  const totalUplinks = gateways.reduce(
-    (sum, g) => sum + (g.uplink_count || 0),
-    0,
-  );
-  const totalDownlinks = gateways.reduce(
-    (sum, g) => sum + (g.downlink_count || 0),
-    0,
-  );
-
   return (
     <div className="min-h-screen bg-surface">
       <Header breadcrumb="Multi-Gateway" />
@@ -443,10 +467,10 @@ export default function MultiGateway() {
         <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
           <SummaryCard title="Total Gateways" value={summary.total} />
           <SummaryCard title="Connected" value={summary.connected} />
-          <SummaryCard title="Uplinks" value={totalUplinks.toLocaleString()} />
+          <SummaryCard title="Uplinks" value={summary.totalUplinks.toLocaleString()} />
           <SummaryCard
             title="Downlinks"
-            value={totalDownlinks.toLocaleString()}
+            value={summary.totalDownlinks.toLocaleString()}
           />
         </div>
 

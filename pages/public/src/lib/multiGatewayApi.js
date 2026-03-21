@@ -1,20 +1,13 @@
+import { parseJson } from "./api.js";
+
 const API_BASE = import.meta.env.DEV
   ? "/api/multi-gateway"
   : "https://api.heliumtools.org/multi-gateway";
 
 const SSE_URLS = [
-  "http://hotspot.heliumtools.org:4468/events",
-  "http://hotspot.heliumtools.org:4469/events",
+  "https://hotspot.heliumtools.org:4468/events",
+  "https://hotspot.heliumtools.org:4469/events",
 ];
-
-async function parseJson(res) {
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
 
 export async function fetchGateways() {
   const res = await fetch(`${API_BASE}/gateways`);
