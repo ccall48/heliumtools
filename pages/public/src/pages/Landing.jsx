@@ -47,7 +47,7 @@ const sections = [
         href: "/hotspot-claimer",
         icon: BoltIcon,
         iconBg: "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400",
-        badge: "New",
+        badge: null,
       },
       {
         name: "Hotspot Map",
@@ -56,7 +56,7 @@ const sections = [
         href: "/hotspot-map",
         icon: MapPinIcon,
         iconBg: "bg-violet-50 text-violet-600 dark:bg-violet-950/40 dark:text-violet-400",
-        badge: "New",
+        badge: null,
       },
       {
         name: "L1 Migration",
