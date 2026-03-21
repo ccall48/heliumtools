@@ -4,10 +4,7 @@ const API_BASE = import.meta.env.DEV
   ? "/api/multi-gateway"
   : "https://api.heliumtools.org/multi-gateway";
 
-const SSE_URLS = [
-  "http://hotspot.heliumtools.org:4468/events",
-  "http://hotspot.heliumtools.org:4469/events",
-];
+const SSE_URL = `${API_BASE}/events`;
 
 export async function fetchGateways() {
   const res = await fetch(`${API_BASE}/gateways`);
@@ -23,6 +20,6 @@ export async function fetchGatewayPackets(mac) {
   return data;
 }
 
-export function createEventSources() {
-  return SSE_URLS.map((url) => new EventSource(url));
+export function createEventSource() {
+  return new EventSource(SSE_URL);
 }

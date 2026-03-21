@@ -5,7 +5,7 @@ import CopyButton from "../components/CopyButton.jsx";
 import {
   fetchGateways,
   fetchGatewayPackets,
-  createEventSources,
+  createEventSource,
 } from "../lib/multiGatewayApi.js";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
 
@@ -71,18 +71,14 @@ function useMultiGateway() {
       .catch((err) => console.error("Failed to fetch gateways:", err));
   }, []);
 
-  // SSE connections (one per region)
+  // SSE connection (Worker merges all region streams)
   useEffect(() => {
-    const sources = createEventSources();
+    const es = createEventSource();
 
-    let openCount = 0;
-    const handleOpen = () => {
-      openCount++;
-      if (openCount === sources.length) setSseStatus("connected");
-    };
-    const handleError = () => setSseStatus("reconnecting");
+    es.onopen = () => setSseStatus("connected");
+    es.onerror = () => setSseStatus("reconnecting");
 
-    const handleMessage = (event) => {
+    es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         switch (data.type) {
@@ -156,13 +152,7 @@ function useMultiGateway() {
       }
     };
 
-    for (const es of sources) {
-      es.onopen = handleOpen;
-      es.onerror = handleError;
-      es.onmessage = handleMessage;
-    }
-
-    return () => sources.forEach((es) => es.close());
+    return () => es.close();
   }, []);
 
   // Memoize derived counts so they are only recomputed when gateways changes,

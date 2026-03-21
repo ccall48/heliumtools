@@ -75,5 +75,57 @@ export async function handleMultiGatewayRequest(request, env, ctx) {
     return jsonResponse({ error: "Gateway not found" }, 404);
   }
 
+  // SSE proxy — merge event streams from all regions
+  if (pathname === "/events" && request.method === "GET") {
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
+
+    const sources = REGIONS.map(({ port }) =>
+      fetch(`http://${host}:${port}/events`),
+    );
+
+    // Pipe each upstream SSE stream into the merged output
+    Promise.allSettled(sources).then(async (results) => {
+      const readers = [];
+      for (const result of results) {
+        if (result.status === "fulfilled" && result.value.ok) {
+          readers.push(result.value.body.getReader());
+        }
+      }
+
+      if (readers.length === 0) {
+        await writer.write(encoder.encode("data: {\"error\":\"No upstream available\"}\n\n"));
+        await writer.close();
+        return;
+      }
+
+      // Read from all streams concurrently until all close
+      await Promise.allSettled(
+        readers.map(async (reader) => {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            try {
+              await writer.write(value);
+            } catch {
+              break; // client disconnected
+            }
+          }
+        }),
+      );
+
+      try { await writer.close(); } catch { /* already closed */ }
+    });
+
+    return new Response(readable, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        ...corsHeaders,
+      },
+    });
+  }
+
   return jsonResponse({ error: "Not found" }, 404);
 }
