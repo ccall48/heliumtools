@@ -5,8 +5,8 @@ const API_BASE = import.meta.env.DEV
   : "https://api.heliumtools.org/multi-gateway";
 
 const SSE_URLS = [
-  "https://hotspot.heliumtools.org:4468/events",
-  "https://hotspot.heliumtools.org:4469/events",
+  "http://hotspot.heliumtools.org:4468/events",
+  "http://hotspot.heliumtools.org:4469/events",
 ];
 
 export async function fetchGateways() {
