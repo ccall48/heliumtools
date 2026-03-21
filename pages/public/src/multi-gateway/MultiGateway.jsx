@@ -220,7 +220,8 @@ function SetupNote() {
           </div>
           <p className="mt-3 text-content-tertiary">
             A keypair is auto-provisioned on first connection. The gateway will
-            connect as a new Hotspot on the network.
+            connect as a new Hotspot on the network. Each gateway must have a
+            unique MAC address (Gateway EUI).
           </p>
         </div>
       )}
