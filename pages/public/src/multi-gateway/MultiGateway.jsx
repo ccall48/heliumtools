@@ -13,6 +13,7 @@ import {
   formatTimeAgo,
 } from "../lib/utils.js";
 import animalHash from "angry-purple-tiger";
+import { devAddrToNetId, netIdToOperator } from "../lib/lorawan.js";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
 
 function gatewayName(publicKey) {
@@ -354,6 +355,22 @@ const FRAME_TYPE_LABELS = {
   Proprietary: { label: "Prop", title: "Proprietary", color: "text-content-tertiary" },
 };
 
+function NetIdCell({ devAddr }) {
+  if (!devAddr) return <span className="text-content-tertiary">-</span>;
+  const result = devAddrToNetId(devAddr);
+  if (!result) return <span className="text-content-tertiary">-</span>;
+  const operator = netIdToOperator(result.netId);
+  return (
+    <span className="font-mono text-xs" title={`NetID: ${result.netId} (Type ${result.type})`}>
+      {operator ? (
+        <span className="text-content-primary">{operator}</span>
+      ) : (
+        <span className="text-content-secondary">{result.netId}</span>
+      )}
+    </span>
+  );
+}
+
 function FrameTypeBadge({ frameType }) {
   const info = FRAME_TYPE_LABELS[frameType] || {
     label: frameType || "?",
@@ -428,6 +445,7 @@ function GatewayDetail({ mac, publicKey, latestPacket, onClose }) {
               <tr className="bg-surface-inset text-left text-xs font-medium uppercase tracking-wider text-content-tertiary">
                 <th className="px-4 py-2">Time</th>
                 <th className="px-4 py-2">Type</th>
+                <th className="px-4 py-2">NetID</th>
                 <th className="px-4 py-2">DevAddr</th>
                 <th className="px-4 py-2 text-right">FCnt</th>
                 <th className="px-4 py-2 text-right">FPort</th>
@@ -449,6 +467,9 @@ function GatewayDetail({ mac, publicKey, latestPacket, onClose }) {
                   </td>
                   <td className="px-4 py-2">
                     <FrameTypeBadge frameType={pkt.frame_type} />
+                  </td>
+                  <td className="px-4 py-2">
+                    <NetIdCell devAddr={pkt.dev_addr} />
                   </td>
                   <td className="px-4 py-2 font-mono text-xs text-content-secondary">
                     {pkt.dev_addr || "-"}
