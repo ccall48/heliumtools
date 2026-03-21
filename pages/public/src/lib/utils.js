@@ -15,6 +15,15 @@ export const usdFormatter = new Intl.NumberFormat("en-US", {
 /** Format plain numbers with commas (e.g. "1,234,567") */
 export const numberFormatter = new Intl.NumberFormat("en-US");
 
+/** Title-case a kebab-case string (e.g. "spare-pewter-toad" → "Spare Pewter Toad") */
+export function titleCase(name) {
+  if (!name) return null;
+  return name
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
 /** Truncate a long string with ellipsis (e.g. "AABBCCDD...0011") */
 export function truncateString(str, head = 6, tail = 4) {
   if (!str || str.length <= head + tail + 3) return str || "";

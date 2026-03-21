@@ -11,8 +11,15 @@ import {
   truncateString,
   formatDuration,
   formatTimeAgo,
+  titleCase,
 } from "../lib/utils.js";
+import animalHash from "angry-purple-tiger";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
+
+function gatewayName(publicKey) {
+  if (!publicKey) return null;
+  return titleCase(animalHash(publicKey));
+}
 
 // ---------------------------------------------------------------------------
 // SSE Hook
@@ -303,8 +310,8 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
                 </td>
                 <td className="px-4 py-3">
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="font-mono text-xs text-content-secondary">
-                      {truncateString(gw.public_key, 8, 4)}
+                    <span className="text-xs text-content-primary">
+                      {gatewayName(gw.public_key) || truncateString(gw.public_key, 8, 4)}
                     </span>
                     {gw.public_key && <CopyButton text={gw.public_key} />}
                   </span>
@@ -358,7 +365,7 @@ function FrameTypeBadge({ frameType }) {
   );
 }
 
-function GatewayDetail({ mac, latestPacket, onClose }) {
+function GatewayDetail({ mac, publicKey, latestPacket, onClose }) {
   const idRef = useRef(0);
   const tagPackets = (arr, isNew) =>
     arr.map((pkt) => ({ ...pkt, _id: ++idRef.current, _new: isNew }));
@@ -391,8 +398,8 @@ function GatewayDetail({ mac, latestPacket, onClose }) {
     <div className="mt-4 rounded-xl border border-border bg-surface-raised shadow-soft">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <h3 className="text-sm font-medium text-content-primary">
-          Recent Packets &mdash;{" "}
-          <span className="font-mono text-xs text-content-secondary">
+          {gatewayName(publicKey) || "Recent Packets"}{" "}
+          <span className="font-mono text-xs text-content-tertiary">
             {mac}
           </span>
         </h3>
@@ -527,6 +534,7 @@ export default function MultiGateway() {
         {selectedMac && (
           <GatewayDetail
             mac={selectedMac}
+            publicKey={gateways.find((g) => g.mac === selectedMac)?.public_key}
             latestPacket={latestPacket}
             onClose={() => setSelectedMac(null)}
           />
