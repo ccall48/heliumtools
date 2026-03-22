@@ -401,11 +401,18 @@ function GatewayDetail({ mac, publicKey, latestPacket, onClose }) {
     arr.map((pkt) => ({ ...pkt, _id: ++idRef.current, _new: isNew }));
   const [packets, setPackets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [, setTimeTick] = useState(0);
   const [visibleTypes, setVisibleTypes] = useState(() =>
     Object.fromEntries(
       ALL_FRAME_TYPES.map((t) => [t, t !== "JoinRequest" && t !== "JoinAccept"]),
     ),
   );
+
+  // 1-second tick to keep "Xs ago" timestamps fresh
+  useEffect(() => {
+    const id = setInterval(() => setTimeTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const toggleType = (type) =>
     setVisibleTypes((prev) => ({ ...prev, [type]: !prev[type] }));
@@ -509,7 +516,7 @@ function GatewayDetail({ mac, publicKey, latestPacket, onClose }) {
                   key={pkt._id}
                   className={`border-t border-border-muted text-content-secondary ${pkt._new ? "animate-pulse-once" : ""}`}
                 >
-                  <td className="px-4 py-2 text-xs">
+                  <td className="px-4 py-2 text-xs tabular-nums">
                     {formatTimeAgo(pkt.timestamp)}
                   </td>
                   <td className="px-4 py-2">
