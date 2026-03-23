@@ -3,6 +3,7 @@ import { corsHeaders, jsonResponse } from "../../lib/response.js";
 const REGIONS = [
   { region: "US915", port: 4468 },
   { region: "EU868", port: 4469 },
+  { region: "AU915", port: 4470 },
 ];
 
 function getHost(env) {

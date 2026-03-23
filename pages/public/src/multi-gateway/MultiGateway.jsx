@@ -225,6 +225,8 @@ function SetupNote() {
               <span className="font-mono text-content-secondary">1680</span>.
               For EU868, use port{" "}
               <span className="font-mono text-content-secondary">1681</span>.
+              For AU915, use port{" "}
+              <span className="font-mono text-content-secondary">1682</span>.
             </p>
           </div>
           <p className="mt-3 text-content-tertiary">
