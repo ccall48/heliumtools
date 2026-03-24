@@ -23,3 +23,10 @@ export async function fetchGatewayPackets(mac) {
 export function createEventSource() {
   return new EventSource(SSE_URL);
 }
+
+export async function fetchOuis() {
+  const res = await fetch(`${API_BASE}/ouis`);
+  const data = await parseJson(res);
+  if (!res.ok) return null;
+  return data;
+}

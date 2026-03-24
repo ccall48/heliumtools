@@ -1,4 +1,5 @@
 import { corsHeaders, jsonResponse } from "../../lib/response.js";
+import { getOuiCache, refreshOuiCache } from "./oui-cache.js";
 
 const REGIONS = [
   { region: "US915", port: 4468 },
@@ -141,6 +142,11 @@ export async function handleMultiGatewayRequest(request, env, ctx) {
         ...corsHeaders,
       },
     });
+  }
+
+  if (pathname === "/ouis" && request.method === "GET") {
+    const data = await getOuiCache(env);
+    return jsonResponse(data);
   }
 
   return jsonResponse({ error: "Not found" }, 404);

@@ -5,6 +5,7 @@ import CopyButton from "../components/CopyButton.jsx";
 import {
   fetchGateways,
   fetchGatewayPackets,
+  fetchOuis,
   createEventSource,
 } from "../lib/multiGatewayApi.js";
 import {
@@ -23,6 +24,45 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 const BASEMAP_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const BASEMAP_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
+// Helium NetIDs where OUI lookup applies
+const HELIUM_NET_IDS = new Set(["000024", "00003C", "C00053", "60002D"]);
+
+/**
+ * Build a sorted lookup from OUI cache data.
+ * Returns a function: devAddrHex → { oui, name } | null
+ */
+function buildOuiLookup(ouiData) {
+  if (!ouiData?.ouis) return () => null;
+  // Flatten all ranges with their OUI info, sort by start
+  const entries = [];
+  for (const o of ouiData.ouis) {
+    for (const r of o.ranges) {
+      entries.push({
+        start: parseInt(r.start, 16) >>> 0,
+        end: parseInt(r.end, 16) >>> 0,
+        oui: o.oui,
+        name: o.name,
+      });
+    }
+  }
+  entries.sort((a, b) => a.start - b.start);
+
+  return (devAddrHex) => {
+    if (!devAddrHex) return null;
+    const addr = parseInt(devAddrHex, 16) >>> 0;
+    // Binary search
+    let lo = 0;
+    let hi = entries.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      if (addr < entries[mid].start) hi = mid - 1;
+      else if (addr > entries[mid].end) lo = mid + 1;
+      else return { oui: entries[mid].oui, name: entries[mid].name };
+    }
+    return null;
+  };
+}
 
 function gatewayName(publicKey) {
   if (!publicKey) return null;
@@ -405,7 +445,22 @@ function FrameTypeBadge({ frameType }) {
 const ALL_FRAME_TYPES = Object.keys(FRAME_TYPE_LABELS);
 const MAX_PACKETS = 200;
 
-function GatewayDetail({ mac, publicKey, latestPacket, onClose }) {
+function OuiCell({ devAddr, ouiLookup }) {
+  if (!devAddr) return <span className="text-content-tertiary">-</span>;
+  const netId = devAddrToNetId(devAddr);
+  if (!netId || !HELIUM_NET_IDS.has(netId.netId)) {
+    return <span className="text-content-tertiary">-</span>;
+  }
+  const match = ouiLookup(devAddr);
+  if (!match) return <span className="text-content-tertiary">-</span>;
+  return (
+    <span className="text-xs text-content-secondary" title={`OUI ${match.oui}`}>
+      {match.name || match.oui}
+    </span>
+  );
+}
+
+function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
   const idRef = useRef(0);
   const tagPackets = (arr, isNew) =>
     arr.map((pkt) => ({ ...pkt, _id: ++idRef.current, _new: isNew }));
@@ -511,6 +566,7 @@ function GatewayDetail({ mac, publicKey, latestPacket, onClose }) {
                 <th className="px-4 py-2">Type</th>
                 <th className="px-4 py-2">NetID</th>
                 <th className="px-4 py-2">DevAddr</th>
+                <th className="px-4 py-2">OUI</th>
                 <th className="px-4 py-2 text-right">FCnt</th>
                 <th className="px-4 py-2 text-right">FPort</th>
                 <th className="px-4 py-2 text-right">RSSI</th>
@@ -537,6 +593,9 @@ function GatewayDetail({ mac, publicKey, latestPacket, onClose }) {
                   </td>
                   <td className="px-4 py-2 font-mono text-xs text-content-secondary">
                     {pkt.dev_addr || "-"}
+                  </td>
+                  <td className="px-4 py-2">
+                    <OuiCell devAddr={pkt.dev_addr} ouiLookup={ouiLookup} />
                   </td>
                   <td className="px-4 py-2 text-right font-mono text-xs text-content-secondary">
                     {pkt.fcnt ?? "-"}
@@ -701,6 +760,16 @@ export default function MultiGateway() {
   const { gateways, summary, sseStatus, latestPacket } = useMultiGateway();
   const [selectedMac, setSelectedMac] = useState(null);
   const [showMap, setShowMap] = useState(false);
+  const [ouiLookup, setOuiLookup] = useState(() => () => null);
+
+  // Fetch OUI → DevAddr mapping once
+  useEffect(() => {
+    fetchOuis()
+      .then((data) => {
+        if (data) setOuiLookup(() => buildOuiLookup(data));
+      })
+      .catch((err) => console.error("Failed to fetch OUI data:", err));
+  }, []);
 
   // Press M to toggle map (ignore when typing in an input)
   useEffect(() => {
@@ -756,6 +825,7 @@ export default function MultiGateway() {
             mac={selectedMac}
             publicKey={gateways.find((g) => g.mac === selectedMac)?.public_key}
             latestPacket={latestPacket}
+            ouiLookup={ouiLookup}
             onClose={() => setSelectedMac(null)}
           />
         )}

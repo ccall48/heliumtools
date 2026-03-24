@@ -9,6 +9,7 @@ import {
 import { handleHotspotClaimerRequest } from "./tools/hotspot-claimer/index.js";
 import { handleHotspotMapRequest } from "./tools/hotspot-map/index.js";
 import { handleMultiGatewayRequest } from "./tools/multi-gateway/index.js";
+import { refreshOuiCache } from "./tools/multi-gateway/oui-cache.js";
 
 const routes = [
   { prefix: "/oui-notifier", handler: handleOuiNotifierRequest },
@@ -45,5 +46,6 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runOuiNotifierDaily(env));
     ctx.waitUntil(runDcPurchaseScheduled(env, ctx));
+    ctx.waitUntil(refreshOuiCache(env));
   },
 };
