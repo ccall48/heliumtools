@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
 import StatusBanner from "../components/StatusBanner.jsx";
 import CopyButton from "../components/CopyButton.jsx";
@@ -752,9 +753,22 @@ function GatewayMapModal({ gateways, onClose }) {
 
 export default function MultiGateway() {
   const { gateways, summary, sseStatus, latestPacket } = useMultiGateway();
-  const [selectedMac, setSelectedMac] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedMac, setSelectedMac] = useState(
+    () => searchParams.get("mac") || null,
+  );
   const [showMap, setShowMap] = useState(false);
   const [ouiLookup, setOuiLookup] = useState(() => () => null);
+
+  // Sync selected MAC to URL param
+  const selectMac = (mac) => {
+    setSelectedMac(mac);
+    if (mac) {
+      setSearchParams({ mac }, { replace: true });
+    } else {
+      setSearchParams({}, { replace: true });
+    }
+  };
 
   // Fetch OUI → DevAddr mapping once
   useEffect(() => {
@@ -810,7 +824,7 @@ export default function MultiGateway() {
           <GatewayTable
             gateways={gateways}
             selectedMac={selectedMac}
-            onSelect={setSelectedMac}
+            onSelect={selectMac}
           />
         </div>
 
@@ -820,7 +834,7 @@ export default function MultiGateway() {
             publicKey={gateways.find((g) => g.mac === selectedMac)?.public_key}
             latestPacket={latestPacket}
             ouiLookup={ouiLookup}
-            onClose={() => setSelectedMac(null)}
+            onClose={() => selectMac(null)}
           />
         )}
       </div>
