@@ -25,8 +25,6 @@ import "maplibre-gl/dist/maplibre-gl.css";
 const BASEMAP_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const BASEMAP_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
-// Helium NetIDs where OUI lookup applies
-const HELIUM_NET_IDS = new Set(["000024", "00003C", "C00053", "60002D"]);
 
 /**
  * Build a sorted lookup from OUI cache data.
@@ -447,10 +445,6 @@ const MAX_PACKETS = 200;
 
 function OuiCell({ devAddr, ouiLookup }) {
   if (!devAddr) return <span className="text-content-tertiary">-</span>;
-  const netId = devAddrToNetId(devAddr);
-  if (!netId || !HELIUM_NET_IDS.has(netId.netId)) {
-    return <span className="text-content-tertiary">-</span>;
-  }
   const match = ouiLookup(devAddr);
   if (!match) return <span className="text-content-tertiary">-</span>;
   return (
