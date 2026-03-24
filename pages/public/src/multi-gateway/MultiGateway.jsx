@@ -444,14 +444,29 @@ function FrameTypeBadge({ frameType }) {
 const ALL_FRAME_TYPES = Object.keys(FRAME_TYPE_LABELS);
 const MAX_PACKETS = 200;
 
+const WELL_KNOWN_REPO = "https://github.com/helium/well-known/blob/main/lists/ouis.json";
+
 function OuiCell({ devAddr, ouiLookup }) {
   if (!devAddr) return <span className="text-content-tertiary">-</span>;
   const match = ouiLookup(devAddr);
   if (!match) return <span className="text-content-tertiary">-</span>;
+  if (match.name) {
+    return (
+      <span className="text-xs text-content-secondary" title={`OUI ${match.oui}`}>
+        {match.name}
+      </span>
+    );
+  }
   return (
-    <span className="text-xs text-content-secondary" title={`OUI ${match.oui}`}>
-      {match.name || match.oui}
-    </span>
+    <a
+      href={WELL_KNOWN_REPO}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-xs text-accent hover:underline"
+      title="Identify this OUI"
+    >
+      {match.oui}
+    </a>
   );
 }
 
