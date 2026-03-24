@@ -444,7 +444,7 @@ function FrameTypeBadge({ frameType }) {
 const ALL_FRAME_TYPES = Object.keys(FRAME_TYPE_LABELS);
 const MAX_PACKETS = 200;
 
-const WELL_KNOWN_REPO = "https://github.com/helium/well-known/blob/main/lists/ouis.json";
+const WELL_KNOWN_REPO = "https://github.com/helium/well-known/";
 
 function OuiCell({ devAddr, ouiLookup }) {
   if (!devAddr) return <span className="text-content-tertiary">-</span>;
