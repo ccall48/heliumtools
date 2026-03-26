@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
 import StatusBanner from "../components/StatusBanner.jsx";
@@ -443,14 +443,14 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
 }
 
 const FRAME_TYPES = {
-  UnconfirmedUp: { icon: ArrowUpCircleIcon, title: "Unconfirmed Uplink", label: "Uplink", color: "text-emerald-500/60 dark:text-emerald-400/50" },
-  ConfirmedUp: { icon: ArrowUpCircleSolidIcon, title: "Confirmed Uplink", color: "text-emerald-600 dark:text-emerald-400" },
-  UnconfirmedDown: { icon: ArrowDownCircleIcon, title: "Unconfirmed Downlink", label: "Downlink", color: "text-sky-500/60 dark:text-sky-400/50" },
-  ConfirmedDown: { icon: ArrowDownCircleSolidIcon, title: "Confirmed Downlink", color: "text-sky-600 dark:text-sky-400" },
-  JoinRequest: { icon: ArrowUturnUpIcon, title: "Join Request", color: "text-violet-500/60 dark:text-violet-400/50" },
-  JoinAccept: { icon: ArrowUturnDownIcon, title: "Join Accept", color: "text-violet-600 dark:text-violet-400" },
-  RejoinRequest: { icon: ArrowPathRoundedSquareIcon, title: "Rejoin Request", color: "text-violet-500 dark:text-violet-400/70" },
-  Proprietary: { icon: QuestionMarkCircleIcon, title: "Proprietary", color: "text-content-tertiary" },
+  UnconfirmedUp: { icon: ArrowUpCircleIcon, title: "Unconfirmed Uplink", label: "Uplink", group: 0, color: "text-emerald-500/60 dark:text-emerald-400/50" },
+  ConfirmedUp: { icon: ArrowUpCircleSolidIcon, title: "Confirmed Uplink", group: 0, color: "text-emerald-600 dark:text-emerald-400" },
+  UnconfirmedDown: { icon: ArrowDownCircleIcon, title: "Unconfirmed Downlink", label: "Downlink", group: 1, color: "text-sky-500/60 dark:text-sky-400/50" },
+  ConfirmedDown: { icon: ArrowDownCircleSolidIcon, title: "Confirmed Downlink", group: 1, color: "text-sky-600 dark:text-sky-400" },
+  JoinRequest: { icon: ArrowUturnUpIcon, title: "Join Request", group: 2, color: "text-violet-500/60 dark:text-violet-400/50" },
+  JoinAccept: { icon: ArrowUturnDownIcon, title: "Join Accept", group: 2, color: "text-violet-600 dark:text-violet-400" },
+  RejoinRequest: { icon: ArrowPathRoundedSquareIcon, title: "Rejoin Request", group: 2, color: "text-violet-500 dark:text-violet-400/70" },
+  Proprietary: { icon: QuestionMarkCircleIcon, title: "Proprietary", group: 3, color: "text-content-tertiary" },
 };
 
 function NetIdCell({ devAddr }) {
@@ -577,28 +577,30 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-3 border-b border-border px-4 py-2">
-        {ALL_FRAME_TYPES.map((type) => {
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
+        {ALL_FRAME_TYPES.map((type, i) => {
           const info = FRAME_TYPES[type];
+          const prevGroup = i > 0 ? FRAME_TYPES[ALL_FRAME_TYPES[i - 1]].group : info.group;
           return (
-            <label
-              key={type}
-              className="inline-flex cursor-pointer items-center gap-1.5 text-xs"
-              title={info.title}
-            >
-              <input
-                type="checkbox"
-                checked={visibleTypes[type]}
-                onChange={() => toggleType(type)}
-                className="h-3 w-3 rounded border-border text-accent focus:ring-accent"
-              />
-              <info.icon
-                className={`h-3.5 w-3.5 ${visibleTypes[type] ? info.color : "text-content-tertiary"}`}
-              />
-              <span className={visibleTypes[type] ? "text-content-secondary" : "text-content-tertiary"}>
-                {info.label || info.title}
-              </span>
-            </label>
+            <Fragment key={type}>
+              {info.group !== prevGroup && (
+                <span className="text-border-muted select-none">|</span>
+              )}
+              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs" title={info.title}>
+                <input
+                  type="checkbox"
+                  checked={visibleTypes[type]}
+                  onChange={() => toggleType(type)}
+                  className="h-3 w-3 rounded border-border text-accent focus:ring-accent"
+                />
+                <info.icon
+                  className={`h-3.5 w-3.5 ${visibleTypes[type] ? info.color : "text-content-tertiary"}`}
+                />
+                <span className={visibleTypes[type] ? "text-content-secondary" : "text-content-tertiary"}>
+                  {info.label || info.title}
+                </span>
+              </label>
+            </Fragment>
           );
         })}
       </div>
