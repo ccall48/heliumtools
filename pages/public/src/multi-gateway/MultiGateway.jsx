@@ -443,10 +443,10 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
 }
 
 const FRAME_TYPES = {
+  UnconfirmedUp: { icon: ArrowUpCircleIcon, title: "Unconfirmed Uplink", label: "Uplink", color: "text-emerald-500/60 dark:text-emerald-400/50" },
   ConfirmedUp: { icon: ArrowUpCircleSolidIcon, title: "Confirmed Uplink", color: "text-emerald-600 dark:text-emerald-400" },
-  UnconfirmedUp: { icon: ArrowUpCircleIcon, title: "Unconfirmed Uplink", color: "text-emerald-500/60 dark:text-emerald-400/50" },
+  UnconfirmedDown: { icon: ArrowDownCircleIcon, title: "Unconfirmed Downlink", label: "Downlink", color: "text-sky-500/60 dark:text-sky-400/50" },
   ConfirmedDown: { icon: ArrowDownCircleSolidIcon, title: "Confirmed Downlink", color: "text-sky-600 dark:text-sky-400" },
-  UnconfirmedDown: { icon: ArrowDownCircleIcon, title: "Unconfirmed Downlink", color: "text-sky-500/60 dark:text-sky-400/50" },
   JoinRequest: { icon: ArrowUturnUpIcon, title: "Join Request", color: "text-violet-500/60 dark:text-violet-400/50" },
   JoinAccept: { icon: ArrowUturnDownIcon, title: "Join Accept", color: "text-violet-600 dark:text-violet-400" },
   RejoinRequest: { icon: ArrowPathRoundedSquareIcon, title: "Rejoin Request", color: "text-violet-500 dark:text-violet-400/70" },
@@ -596,7 +596,7 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
                 className={`h-3.5 w-3.5 ${visibleTypes[type] ? info.color : "text-content-tertiary"}`}
               />
               <span className={visibleTypes[type] ? "text-content-secondary" : "text-content-tertiary"}>
-                {info.title}
+                {info.label || info.title}
               </span>
             </label>
           );
