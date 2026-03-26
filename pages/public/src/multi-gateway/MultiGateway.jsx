@@ -76,13 +76,6 @@ function useMultiGateway() {
   const [gateways, setGateways] = useState([]);
   const [sseStatus, setSseStatus] = useState("connecting");
   const [latestPacket, setLatestPacket] = useState(null);
-  const [tick, setTick] = useState(0);
-
-  // Tick every 5s to keep relative timestamps fresh
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 5000);
-    return () => clearInterval(id);
-  }, []);
 
   // Convert API relative-seconds to absolute timestamps
   const loadGateways = () =>
@@ -246,6 +239,17 @@ function useMultiGateway() {
 // Sub-components
 // ---------------------------------------------------------------------------
 
+/** Self-updating timestamp display. Re-renders only itself every second. */
+function LiveTime({ value, formatter }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!value) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [value]);
+  return <span className="tabular-nums">{formatter(value)}</span>;
+}
+
 function SummaryCard({ title, value }) {
   return (
     <div className="rounded-xl border border-border bg-surface-raised p-4 shadow-soft">
@@ -395,14 +399,19 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right text-content-secondary">
-                  {gw.connected && gw.connected_at
-                    ? formatDuration(
-                        Math.floor((Date.now() - gw.connected_at) / 1000),
-                      )
-                    : "Offline"}
+                  {gw.connected && gw.connected_at ? (
+                    <LiveTime
+                      value={gw.connected_at}
+                      formatter={(t) =>
+                        formatDuration(Math.floor((Date.now() - t) / 1000))
+                      }
+                    />
+                  ) : (
+                    "Offline"
+                  )}
                 </td>
                 <td className="px-4 py-3 text-right text-content-secondary">
-                  {formatTimeAgo(gw.last_uplink_at)}
+                  <LiveTime value={gw.last_uplink_at} formatter={formatTimeAgo} />
                 </td>
                 <td className="px-4 py-3 text-right font-mono text-xs text-content-secondary">
                   {gw.uplink_count ?? 0}
@@ -502,18 +511,11 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
     arr.map((pkt) => ({ ...pkt, _id: ++idRef.current, _new: isNew }));
   const [packets, setPackets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [, setTimeTick] = useState(0);
   const [visibleTypes, setVisibleTypes] = useState(() =>
     Object.fromEntries(
       ALL_FRAME_TYPES.map((t) => [t, t !== "JoinRequest" && t !== "JoinAccept"]),
     ),
   );
-
-  // 1-second tick to keep "Xs ago" timestamps fresh
-  useEffect(() => {
-    const id = setInterval(() => setTimeTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
 
   const toggleType = (type) =>
     setVisibleTypes((prev) => ({ ...prev, [type]: !prev[type] }));
@@ -618,8 +620,8 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
                   key={pkt._id}
                   className={`border-t border-border-muted text-content-secondary ${pkt._new ? "animate-pulse-once" : ""}`}
                 >
-                  <td className="px-4 py-2 text-xs tabular-nums">
-                    {formatTimeAgo(pkt.timestamp)}
+                  <td className="px-4 py-2 text-xs">
+                    <LiveTime value={pkt.timestamp} formatter={formatTimeAgo} />
                   </td>
                   <td className="px-4 py-2">
                     <FrameTypeBadge frameType={pkt.frame_type} />
