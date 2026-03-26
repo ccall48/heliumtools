@@ -3,7 +3,6 @@ import { useSearchParams } from "react-router-dom";
 import Header from "../components/Header.jsx";
 import StatusBanner from "../components/StatusBanner.jsx";
 import CopyButton from "../components/CopyButton.jsx";
-import Tooltip from "../components/Tooltip.jsx";
 import {
   fetchGateways,
   fetchGatewayPackets,
@@ -382,16 +381,17 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
                   gw.mac === selectedMac ? "bg-surface-inset" : ""
                 }`}
               >
-                <td className="w-8 px-2 py-3">
-                  <Tooltip content={gw.connected ? "Active" : "Inactive"}>
-                    <span
-                      className={`inline-block h-2 w-2 rounded-full ${
-                        gw.connected
-                          ? "bg-emerald-500"
-                          : "bg-content-tertiary"
-                      }`}
-                    />
-                  </Tooltip>
+                <td
+                  className="w-8 px-2 py-3"
+                  title={gw.connected ? "Active" : "Inactive"}
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      gw.connected
+                        ? "bg-emerald-500"
+                        : "bg-content-tertiary"
+                    }`}
+                  />
                 </td>
                 <td className="px-4 py-3">
                   <RegionBadge region={gw.region} />
@@ -406,9 +406,9 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
                 </td>
                 <td className="px-4 py-3">
                   <span className="inline-flex items-center gap-1.5">
-                    <Tooltip content={gw.public_key}><span className="text-xs text-content-primary">
+                    <span className="text-xs text-content-primary" title={gw.public_key}>
                       {gatewayName(gw.public_key) || truncateString(gw.public_key, 8, 4)}
-                    </span></Tooltip>
+                    </span>
                     {gw.public_key && <CopyButton text={gw.public_key} />}
                   </span>
                 </td>
@@ -459,7 +459,7 @@ function NetIdCell({ devAddr }) {
   if (!result) return <span className="text-content-tertiary">-</span>;
   const operator = netIdToOperator(result.netId);
   return (
-    <Tooltip content={`NetID: ${result.netId}`}><span className="text-xs">
+    <span className="text-xs" title={`NetID: ${result.netId}`}>
       {operator ? (
         <span className="text-content-primary">{operator}</span>
       ) : (
@@ -473,7 +473,7 @@ function NetIdCell({ devAddr }) {
         </a>
       )}
       <span className="ml-1.5 text-[10px] text-content-tertiary">T{result.type}</span>
-    </span></Tooltip>
+    </span>
   );
 }
 
@@ -485,9 +485,7 @@ function FrameTypeBadge({ frameType }) {
   };
   const Icon = info.icon;
   return (
-    <Tooltip content={info.title}>
-      <span><Icon className={`h-4 w-4 ${info.color}`} aria-label={info.title} /></span>
-    </Tooltip>
+    <Icon className={`h-4 w-4 ${info.color}`} title={info.title} aria-label={info.title} />
   );
 }
 
@@ -502,22 +500,21 @@ function OuiCell({ devAddr, ouiLookup }) {
   if (!match) return <span className="text-content-tertiary">-</span>;
   if (match.name) {
     return (
-      <Tooltip content={`OUI ${match.oui}`}><span className="text-xs text-content-secondary">
+      <span className="text-xs text-content-secondary" title={`OUI ${match.oui}`}>
         {match.name}
-      </span></Tooltip>
+      </span>
     );
   }
   return (
-    <Tooltip content="Identify this OUI">
-      <a
-        href={WELL_KNOWN_REPO}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-xs text-accent hover:underline"
-      >
-        {match.oui}
-      </a>
-    </Tooltip>
+    <a
+      href={WELL_KNOWN_REPO}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-xs text-accent hover:underline"
+      title="Identify this OUI"
+    >
+      {match.oui}
+    </a>
   );
 }
 
@@ -587,6 +584,7 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
             <label
               key={type}
               className="inline-flex cursor-pointer items-center gap-1.5 text-xs"
+              title={info.title}
             >
               <input
                 type="checkbox"
