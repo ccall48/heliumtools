@@ -442,14 +442,14 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
   );
 }
 
-const FRAME_TYPE_LABELS = {
+const FRAME_TYPES = {
   ConfirmedUp: { icon: ArrowUpCircleSolidIcon, title: "Confirmed Uplink", color: "text-emerald-600 dark:text-emerald-400" },
-  UnconfirmedUp: { icon: ArrowUpCircleIcon, title: "Unconfirmed Uplink", color: "text-emerald-400 dark:text-emerald-600" },
+  UnconfirmedUp: { icon: ArrowUpCircleIcon, title: "Unconfirmed Uplink", color: "text-emerald-500/60 dark:text-emerald-400/50" },
   ConfirmedDown: { icon: ArrowDownCircleSolidIcon, title: "Confirmed Downlink", color: "text-sky-600 dark:text-sky-400" },
-  UnconfirmedDown: { icon: ArrowDownCircleIcon, title: "Unconfirmed Downlink", color: "text-sky-400 dark:text-sky-600" },
-  JoinRequest: { icon: ArrowUturnUpIcon, title: "Join Request", color: "text-violet-400 dark:text-violet-600" },
+  UnconfirmedDown: { icon: ArrowDownCircleIcon, title: "Unconfirmed Downlink", color: "text-sky-500/60 dark:text-sky-400/50" },
+  JoinRequest: { icon: ArrowUturnUpIcon, title: "Join Request", color: "text-violet-500/60 dark:text-violet-400/50" },
   JoinAccept: { icon: ArrowUturnDownIcon, title: "Join Accept", color: "text-violet-600 dark:text-violet-400" },
-  RejoinRequest: { icon: ArrowPathRoundedSquareIcon, title: "Rejoin Request", color: "text-violet-500 dark:text-violet-500" },
+  RejoinRequest: { icon: ArrowPathRoundedSquareIcon, title: "Rejoin Request", color: "text-violet-500 dark:text-violet-400/70" },
   Proprietary: { icon: QuestionMarkCircleIcon, title: "Proprietary", color: "text-content-tertiary" },
 };
 
@@ -478,7 +478,7 @@ function NetIdCell({ devAddr }) {
 }
 
 function FrameTypeBadge({ frameType }) {
-  const info = FRAME_TYPE_LABELS[frameType] || {
+  const info = FRAME_TYPES[frameType] || {
     icon: QuestionMarkCircleIcon,
     title: frameType || "Unknown",
     color: "text-content-tertiary",
@@ -489,7 +489,7 @@ function FrameTypeBadge({ frameType }) {
   );
 }
 
-const ALL_FRAME_TYPES = Object.keys(FRAME_TYPE_LABELS);
+const ALL_FRAME_TYPES = Object.keys(FRAME_TYPES);
 const MAX_PACKETS = 200;
 
 const WELL_KNOWN_REPO = "https://github.com/helium/well-known/";
@@ -579,7 +579,7 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
 
       <div className="flex flex-wrap gap-3 border-b border-border px-4 py-2">
         {ALL_FRAME_TYPES.map((type) => {
-          const info = FRAME_TYPE_LABELS[type];
+          const info = FRAME_TYPES[type];
           return (
             <label
               key={type}
