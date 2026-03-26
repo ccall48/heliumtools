@@ -16,7 +16,21 @@ import {
 } from "../lib/utils.js";
 import animalHash from "angry-purple-tiger";
 import { devAddrToNetId, netIdToOperator } from "../lib/lorawan.js";
-import { ChevronDownIcon, ChevronUpIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import {
+  ArrowDownCircleIcon,
+  ArrowPathRoundedSquareIcon,
+  ArrowUpCircleIcon,
+  ArrowUturnDownIcon,
+  ArrowUturnUpIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  QuestionMarkCircleIcon,
+  XMarkIcon,
+} from "@heroicons/react/24/outline";
+import {
+  ArrowDownCircleIcon as ArrowDownCircleSolidIcon,
+  ArrowUpCircleIcon as ArrowUpCircleSolidIcon,
+} from "@heroicons/react/24/solid";
 import MapGL, { NavigationControl } from "react-map-gl/maplibre";
 import { DeckGL } from "@deck.gl/react";
 import { ScatterplotLayer } from "@deck.gl/layers";
@@ -428,15 +442,15 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
   );
 }
 
-const FRAME_TYPE_LABELS = {
-  JoinRequest: { label: "Join", title: "Join Request", color: "text-violet-600 dark:text-violet-400" },
-  JoinAccept: { label: "Join Acc", title: "Join Accept", color: "text-violet-600 dark:text-violet-400" },
-  UnconfirmedUp: { label: "Uncnf Up", title: "Unconfirmed Uplink", color: "text-content-secondary" },
-  ConfirmedUp: { label: "Cnf Up", title: "Confirmed Uplink", color: "text-sky-600 dark:text-sky-400" },
-  UnconfirmedDown: { label: "Uncnf Dn", title: "Unconfirmed Downlink", color: "text-content-tertiary" },
-  ConfirmedDown: { label: "Cnf Dn", title: "Confirmed Downlink", color: "text-sky-600 dark:text-sky-400" },
-  RejoinRequest: { label: "Rejoin", title: "Rejoin Request", color: "text-amber-600 dark:text-amber-400" },
-  Proprietary: { label: "Prop", title: "Proprietary", color: "text-content-tertiary" },
+const FRAME_TYPES = {
+  ConfirmedUp: { icon: ArrowUpCircleSolidIcon, title: "Confirmed Uplink", color: "text-emerald-600 dark:text-emerald-400" },
+  UnconfirmedUp: { icon: ArrowUpCircleIcon, title: "Unconfirmed Uplink", color: "text-emerald-500/60 dark:text-emerald-400/50" },
+  ConfirmedDown: { icon: ArrowDownCircleSolidIcon, title: "Confirmed Downlink", color: "text-sky-600 dark:text-sky-400" },
+  UnconfirmedDown: { icon: ArrowDownCircleIcon, title: "Unconfirmed Downlink", color: "text-sky-500/60 dark:text-sky-400/50" },
+  JoinRequest: { icon: ArrowUturnUpIcon, title: "Join Request", color: "text-violet-500/60 dark:text-violet-400/50" },
+  JoinAccept: { icon: ArrowUturnDownIcon, title: "Join Accept", color: "text-violet-600 dark:text-violet-400" },
+  RejoinRequest: { icon: ArrowPathRoundedSquareIcon, title: "Rejoin Request", color: "text-violet-500 dark:text-violet-400/70" },
+  Proprietary: { icon: QuestionMarkCircleIcon, title: "Proprietary", color: "text-content-tertiary" },
 };
 
 function NetIdCell({ devAddr }) {
@@ -464,19 +478,18 @@ function NetIdCell({ devAddr }) {
 }
 
 function FrameTypeBadge({ frameType }) {
-  const info = FRAME_TYPE_LABELS[frameType] || {
-    label: frameType || "?",
+  const info = FRAME_TYPES[frameType] || {
+    icon: QuestionMarkCircleIcon,
     title: frameType || "Unknown",
     color: "text-content-tertiary",
   };
+  const Icon = info.icon;
   return (
-    <span className={`text-xs font-medium ${info.color}`} title={info.title}>
-      {info.label}
-    </span>
+    <Icon className={`h-4 w-4 ${info.color}`} title={info.title} aria-label={info.title} />
   );
 }
 
-const ALL_FRAME_TYPES = Object.keys(FRAME_TYPE_LABELS);
+const ALL_FRAME_TYPES = Object.keys(FRAME_TYPES);
 const MAX_PACKETS = 200;
 
 const WELL_KNOWN_REPO = "https://github.com/helium/well-known/";
@@ -566,7 +579,7 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
 
       <div className="flex flex-wrap gap-3 border-b border-border px-4 py-2">
         {ALL_FRAME_TYPES.map((type) => {
-          const info = FRAME_TYPE_LABELS[type];
+          const info = FRAME_TYPES[type];
           return (
             <label
               key={type}
@@ -579,8 +592,11 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
                 onChange={() => toggleType(type)}
                 className="h-3 w-3 rounded border-border text-accent focus:ring-accent"
               />
-              <span className={visibleTypes[type] ? info.color : "text-content-tertiary"}>
-                {info.label}
+              <info.icon
+                className={`h-3.5 w-3.5 ${visibleTypes[type] ? info.color : "text-content-tertiary"}`}
+              />
+              <span className={visibleTypes[type] ? "text-content-secondary" : "text-content-tertiary"}>
+                {info.title}
               </span>
             </label>
           );
