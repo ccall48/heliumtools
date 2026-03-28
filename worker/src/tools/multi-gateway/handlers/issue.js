@@ -4,7 +4,7 @@
  *
  * Returns serialized transactions (base64) for the frontend wallet to sign.
  */
-import { PublicKey, Transaction, VersionedTransaction, TransactionMessage, TransactionInstruction, SystemProgram, Connection } from "@solana/web3.js";
+import { PublicKey, ComputeBudgetProgram, Transaction, VersionedTransaction, TransactionMessage, TransactionInstruction, SystemProgram, Connection } from "@solana/web3.js";
 import { sha256 } from "js-sha256";
 import bs58 from "bs58";
 import { jsonResponse } from "../../../lib/response.js";
@@ -253,19 +253,43 @@ export async function handleIssueAndOnboard(mac, request, env) {
       const issueIx = buildIssueInstruction(ownerPubkey, gatewayPubkey, merkleTree, collection);
       const { blockhash } = await connection.getLatestBlockhash();
 
-      // Build as VersionedTransaction (v0) to match what the ECC verifier expects.
-      // The verifier uses bincode::deserialize<VersionedTransaction>.
+      // The ECC verifier expects compute budget instructions before the
+      // entity manager instruction (it skips up to 2 compute budget ixs).
+      const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 });
+      const computePriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 });
+
       const messageV0 = new TransactionMessage({
         payerKey: ownerPubkey,
         recentBlockhash: blockhash,
-        instructions: [issueIx],
+        instructions: [computeBudgetIx, computePriceIx, issueIx],
       }).compileToLegacyMessage();
 
       const vtx = new VersionedTransaction(messageV0);
-      // Pad signature slots — owner (index 0) + ecc_verifier (index 1)
-      // Both start as zero-filled (unsigned)
 
-      const serializedTx = Buffer.from(vtx.serialize()).toString("hex");
+      // The ECC verifier uses Rust's bincode::deserialize<VersionedTransaction>
+      // which differs from the Solana wire format:
+      //   Wire:    compact_u16(num_sigs) + sigs + message_bytes
+      //   Bincode: u64_le(num_sigs) + sigs + u32_le(variant=0 for legacy) + message_bytes
+      const wireBytes = vtx.serialize();
+      const numSigs = wireBytes[0]; // compact_u16 < 128 = 1 byte
+      const sigsEnd = 1 + numSigs * 64;
+      const sigBytes = wireBytes.slice(1, sigsEnd);
+      const messageBytes = wireBytes.slice(sigsEnd);
+
+      const bincodeNumSigs = Buffer.alloc(8);
+      bincodeNumSigs.writeUInt32LE(numSigs, 0);
+      const bincodeVariant = Buffer.alloc(4); // u32(0) = Legacy variant
+      const bincodeTx = Buffer.concat([bincodeNumSigs, sigBytes, bincodeVariant, messageBytes]);
+      const serializedTx = bincodeTx.toString("hex");
+
+      console.log("ECC verify request:", {
+        txLen: serializedTx.length / 2,
+        msgLen: addTxnData.unsigned_msg.length / 2,
+        sigLen: addTxnData.gateway_signature.length / 2,
+        txPrefix: serializedTx.slice(0, 40),
+        numSigs,
+        entityKey: gatewayPubkey,
+      });
 
       const verifyRes = await fetch(`${ECC_VERIFIER_URL}/verify`, {
         method: "POST",
@@ -284,9 +308,20 @@ export async function handleIssueAndOnboard(mac, request, env) {
 
       const verifyData = await verifyRes.json();
 
+      // Convert response back from bincode to Solana wire format
+      // bincode: u64_le(num_sigs) + sigs + u32_le(variant) + message_bytes
+      // wire:    compact_u16(num_sigs) + sigs + message_bytes
+      const signedBincode = Buffer.from(verifyData.transaction, "hex");
+      const signedNumSigs = signedBincode.readUInt32LE(0);
+      const signedSigsEnd = 8 + signedNumSigs * 64;
+      const signedSigBytes = signedBincode.slice(8, signedSigsEnd);
+      const signedMsgBytes = signedBincode.slice(signedSigsEnd + 4); // skip u32 variant
+      const wirePrefix = Buffer.from([signedNumSigs]);
+      const signedWire = Buffer.concat([wirePrefix, signedSigBytes, signedMsgBytes]);
+
       transactions.push({
         type: "issue",
-        transaction: Buffer.from(verifyData.transaction, "hex").toString("base64"),
+        transaction: signedWire.toString("base64"),
       });
     }
 
