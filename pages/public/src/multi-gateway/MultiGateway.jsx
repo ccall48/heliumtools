@@ -307,14 +307,17 @@ function SetupNote() {
               <span className="text-content-tertiary">server_address:</span>{" "}
               hotspot.heliumtools.org
             </p>
-            <p className="mt-2 font-sans text-content-tertiary">
-              If your gateway region is US915, use port{" "}
-              <span className="font-mono text-content-secondary">1680</span>.
-              For EU868, use port{" "}
-              <span className="font-mono text-content-secondary">1681</span>.
-              For AU915, use port{" "}
-              <span className="font-mono text-content-secondary">1682</span>.
-            </p>
+            <div className="mt-2 font-sans text-content-tertiary">
+              <p>Select the port for your gateway region:</p>
+              <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5">
+                <span>US915 &mdash; <span className="font-mono text-content-secondary">1680</span></span>
+                <span>EU868 &mdash; <span className="font-mono text-content-secondary">1681</span></span>
+                <span>AU915 &mdash; <span className="font-mono text-content-secondary">1682</span></span>
+                <span>AS923_1 &mdash; <span className="font-mono text-content-secondary">1683</span></span>
+                <span>KR920 &mdash; <span className="font-mono text-content-secondary">1684</span></span>
+                <span>IN865 &mdash; <span className="font-mono text-content-secondary">1685</span></span>
+              </div>
+            </div>
           </div>
           <p className="mt-3 text-content-tertiary">
             A keypair is auto-provisioned on first connection. The gateway will
@@ -334,6 +337,8 @@ const REGION_COLORS = {
   EU868: "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
   AU915: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
   AS923_1: "bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300",
+  KR920: "bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300",
+  IN865: "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300",
 };
 
 function RegionBadge({ region }) {
