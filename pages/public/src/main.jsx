@@ -8,6 +8,7 @@ import OrderStatus from "./dc-purchase/OrderStatus.jsx";
 import HotspotClaimer from "./hotspot-claimer/HotspotClaimer.jsx";
 import HotspotMap from "./hotspot-map/HotspotMap.jsx";
 import MultiGateway from "./multi-gateway/MultiGateway.jsx";
+import SolanaProvider from "./multi-gateway/SolanaProvider.jsx";
 import "../fonts/inter.css";
 import "./index.css";
 
@@ -21,7 +22,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <Route path="/dc-purchase/order/:orderId" element={<OrderStatus />} />
         <Route path="/hotspot-claimer" element={<HotspotClaimer />} />
         <Route path="/hotspot-map" element={<HotspotMap />} />
-        <Route path="/multi-gateway" element={<MultiGateway />} />
+        <Route path="/multi-gateway" element={<SolanaProvider><MultiGateway /></SolanaProvider>} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>

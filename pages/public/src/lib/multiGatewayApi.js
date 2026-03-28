@@ -30,3 +30,38 @@ export async function fetchOuis() {
   if (!res.ok) return null;
   return data;
 }
+
+export async function checkOnchainStatus(pubkeys) {
+  const res = await fetch(`${API_BASE}/onchain`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pubkeys }),
+  });
+  const data = await parseJson(res);
+  if (!res.ok) return {};
+  return data?.results || {};
+}
+
+export async function requestIssueTxns(mac, owner) {
+  const res = await fetch(`${API_BASE}/gateways/${mac}/issue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner }),
+  });
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error(data?.error || `Server returned ${res.status}`);
+  if (!data) throw new Error("Empty response from server");
+  return data;
+}
+
+export async function requestAddGatewayTxn(mac, owner, payer) {
+  const res = await fetch(`${API_BASE}/gateways/${mac}/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner, payer: payer || owner }),
+  });
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error(data?.error || `Server returned ${res.status}`);
+  if (!data) throw new Error("Empty response from server");
+  return data;
+}

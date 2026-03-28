@@ -1,5 +1,8 @@
 import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { VersionedTransaction } from "@solana/web3.js";
 import Header from "../components/Header.jsx";
 import StatusBanner from "../components/StatusBanner.jsx";
 import CopyButton from "../components/CopyButton.jsx";
@@ -7,6 +10,9 @@ import {
   fetchGateways,
   fetchGatewayPackets,
   fetchOuis,
+  checkOnchainStatus,
+  requestAddGatewayTxn,
+  requestIssueTxns,
   createEventSource,
 } from "../lib/multiGatewayApi.js";
 import {
@@ -354,7 +360,7 @@ function RegionBadge({ region }) {
   );
 }
 
-function GatewayTable({ gateways, selectedMac, onSelect }) {
+function GatewayTable({ gateways, selectedMac, onSelect, onchainStatus, onOnboard }) {
   if (gateways.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-surface-raised p-8 text-center shadow-soft">
@@ -379,6 +385,7 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
               <th className="px-4 py-3 text-right">Last Uplink</th>
               <th className="px-4 py-3 text-right">Uplinks</th>
               <th className="px-4 py-3 text-right">Downlinks</th>
+              <th className="px-4 py-3 text-center">On-Chain</th>
             </tr>
           </thead>
           <tbody>
@@ -441,6 +448,38 @@ function GatewayTable({ gateways, selectedMac, onSelect }) {
                 </td>
                 <td className="px-4 py-3 text-right font-mono text-xs text-content-secondary">
                   {gw.downlink_count ?? 0}
+                </td>
+                <td className="px-4 py-3 text-center">
+                  {(() => {
+                    const status = onchainStatus?.[gw.public_key];
+                    if (!status) return <span className="text-content-tertiary">—</span>;
+                    if (status.onchain) {
+                      return (
+                        <a
+                          href={status.entity_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400"
+                          title="View on Helium World"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          ✓
+                        </a>
+                      );
+                    }
+                    return (
+                      <button
+                        className="rounded bg-accent px-2 py-0.5 text-[10px] font-medium text-white hover:opacity-90"
+                        title="Onboard this Hotspot"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOnboard?.(gw.mac);
+                        }}
+                      >
+                        Onboard
+                      </button>
+                    );
+                  })()}
                 </td>
               </tr>
             ))}
@@ -818,6 +857,251 @@ function GatewayMapModal({ gateways, onClose }) {
 }
 
 // ---------------------------------------------------------------------------
+// Onboard Modal
+// ---------------------------------------------------------------------------
+
+function OnboardModal({ mac, publicKey, onClose }) {
+  const { connected, publicKey: walletPubkey, sendTransaction } = useWallet();
+  const { connection } = useConnection();
+  const [txnData, setTxnData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [tab, setTab] = useState("wallet"); // "wallet" | "cli"
+
+  const [issueStatus, setIssueStatus] = useState(null); // null | "signing" | "confirming" | "done" | "error"
+  const [txSignature, setTxSignature] = useState(null);
+
+  const handleIssueWithWallet = async () => {
+    if (!walletPubkey || !sendTransaction) return;
+    setLoading(true);
+    setError(null);
+    setIssueStatus("signing");
+    try {
+      const result = await requestIssueTxns(mac, walletPubkey.toBase58());
+
+      if (result.already_issued) {
+        setIssueStatus("done");
+        setTxSignature("already_issued");
+        setLoading(false);
+        return;
+      }
+
+      if (!result.transactions || result.transactions.length === 0) {
+        throw new Error("No transactions returned");
+      }
+
+      // Deserialize and sign each transaction
+      for (const txnInfo of result.transactions) {
+        const txn = VersionedTransaction.deserialize(Buffer.from(txnInfo.transaction, "base64"));
+        setIssueStatus("signing");
+        const sig = await sendTransaction(txn, connection);
+        setIssueStatus("confirming");
+        await connection.confirmTransaction(sig, "confirmed");
+        setTxSignature(sig);
+      }
+
+      setIssueStatus("done");
+    } catch (err) {
+      console.error("Issue failed:", err);
+      setError(err.message);
+      setIssueStatus("error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const [cliWallet, setCliWallet] = useState("");
+  const handleGenerateForCli = async () => {
+    if (!cliWallet.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await requestAddGatewayTxn(mac, cliWallet.trim());
+      setTxnData(data);
+    } catch (err) {
+      console.error("Add gateway failed:", err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="mx-4 w-full max-w-lg rounded-2xl border border-border bg-surface-raised p-6 shadow-lg">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-content-primary">
+            Onboard Hotspot
+          </h3>
+          <button
+            onClick={onClose}
+            className="text-content-tertiary hover:text-content-secondary"
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+
+        <p className="mt-2 text-sm text-content-secondary">
+          {gatewayName(publicKey) || mac}
+        </p>
+        <p className="font-mono text-xs text-content-tertiary">{publicKey}</p>
+
+        {/* Tab switcher */}
+        <div className="mt-4 flex gap-1 rounded-lg bg-surface-inset p-1">
+          <button
+            onClick={() => { setTab("wallet"); setTxnData(null); setError(null); }}
+            className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              tab === "wallet"
+                ? "bg-surface-raised text-content-primary shadow-sm"
+                : "text-content-tertiary hover:text-content-secondary"
+            }`}
+          >
+            Solana Wallet
+          </button>
+          <button
+            onClick={() => { setTab("cli"); setTxnData(null); setError(null); }}
+            className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              tab === "cli"
+                ? "bg-surface-raised text-content-primary shadow-sm"
+                : "text-content-tertiary hover:text-content-secondary"
+            }`}
+          >
+            CLI
+          </button>
+        </div>
+
+        {error && (
+          <p className="mt-3 text-sm text-rose-500">{error}</p>
+        )}
+
+        {/* Wallet tab */}
+        {tab === "wallet" && (
+          <div className="mt-4">
+            <div className="flex justify-center">
+              <WalletMultiButton />
+            </div>
+            {connected && walletPubkey && !issueStatus && (
+              <div className="mt-3">
+                <p className="text-xs text-content-secondary">
+                  Connected: <span className="font-mono">{truncateString(walletPubkey.toBase58(), 8, 4)}</span>
+                </p>
+                <button
+                  onClick={handleIssueWithWallet}
+                  disabled={loading}
+                  className="mt-2 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {loading ? "Preparing..." : "Onboard Hotspot"}
+                </button>
+              </div>
+            )}
+            {issueStatus === "signing" && (
+              <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-500/10 p-3">
+                <p className="text-sm text-sky-600 dark:text-sky-400">Waiting for wallet signature...</p>
+              </div>
+            )}
+            {issueStatus === "confirming" && (
+              <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                <p className="text-sm text-amber-600 dark:text-amber-400">Confirming on Solana...</p>
+              </div>
+            )}
+            {issueStatus === "done" && (
+              <div className="mt-3 space-y-3">
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+                  <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                    {txSignature === "already_issued" ? "Hotspot already issued on-chain!" : "Hotspot issued successfully!"}
+                  </p>
+                  {txSignature && txSignature !== "already_issued" && (
+                    <a
+                      href={`https://solscan.io/tx/${txSignature}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 block text-xs text-accent hover:underline"
+                    >
+                      View on Solscan
+                    </a>
+                  )}
+                </div>
+                <button
+                  onClick={onClose}
+                  className="w-full rounded-lg border border-border px-4 py-2 text-sm text-content-secondary hover:bg-surface-inset"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* CLI tab */}
+        {tab === "cli" && !txnData && (
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-content-secondary">
+              Wallet Address (Solana)
+            </label>
+            <input
+              type="text"
+              value={cliWallet}
+              onChange={(e) => setCliWallet(e.target.value)}
+              placeholder="Enter your Solana wallet address"
+              className="mt-1 w-full rounded-lg border border-border bg-surface-inset px-3 py-2 font-mono text-sm text-content-primary placeholder:text-content-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              onKeyDown={(e) => e.key === "Enter" && handleGenerateForCli()}
+            />
+            <button
+              onClick={handleGenerateForCli}
+              disabled={loading || !cliWallet.trim()}
+              className="mt-3 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {loading ? "Generating..." : "Generate Add Transaction"}
+            </button>
+          </div>
+        )}
+
+        {/* Transaction result */}
+        {txnData && (
+          <div className="mt-4 space-y-4">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+              <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                Transaction signed by gateway
+              </p>
+              <p className="mt-1 text-xs text-content-secondary">
+                Submit using the Helium Wallet CLI.
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-content-tertiary">
+                Signed Transaction
+              </p>
+              <div className="mt-2 flex items-start gap-2">
+                <code className="block max-h-24 flex-1 overflow-auto rounded-lg bg-surface-inset p-2 font-mono text-[10px] text-content-secondary break-all">
+                  {txnData.txn}
+                </code>
+                <CopyButton text={txnData.txn} />
+              </div>
+              <p className="mt-2 text-xs text-content-tertiary">
+                <code className="rounded bg-surface-inset px-1.5 py-0.5 text-content-secondary">
+                  helium-wallet hotspots add {"<txn>"}
+                </code>
+              </p>
+            </div>
+
+            <button
+              onClick={onClose}
+              className="w-full rounded-lg border border-border px-4 py-2 text-sm text-content-secondary hover:bg-surface-inset"
+            >
+              Done
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------------
 
@@ -829,6 +1113,19 @@ export default function MultiGateway() {
   );
   const [showMap, setShowMap] = useState(false);
   const [ouiLookup, setOuiLookup] = useState(() => () => null);
+  const [onchainStatus, setOnchainStatus] = useState({});
+  const [onboardMac, setOnboardMac] = useState(null);
+
+  // Check on-chain status when gateways load
+  useEffect(() => {
+    const pubkeys = gateways
+      .map((g) => g.public_key)
+      .filter((pk) => pk && !onchainStatus[pk]);
+    if (pubkeys.length === 0) return;
+    checkOnchainStatus(pubkeys)
+      .then((results) => setOnchainStatus((prev) => ({ ...prev, ...results })))
+      .catch(() => {});
+  }, [gateways]);
 
   // Sync selected MAC to URL param
   const selectMac = (mac) => {
@@ -895,6 +1192,8 @@ export default function MultiGateway() {
             gateways={gateways}
             selectedMac={selectedMac}
             onSelect={selectMac}
+            onchainStatus={onchainStatus}
+            onOnboard={setOnboardMac}
           />
         </div>
 
@@ -913,6 +1212,14 @@ export default function MultiGateway() {
         <GatewayMapModal
           gateways={gateways}
           onClose={() => setShowMap(false)}
+        />
+      )}
+
+      {onboardMac && (
+        <OnboardModal
+          mac={onboardMac}
+          publicKey={gateways.find((g) => g.mac === onboardMac)?.public_key}
+          onClose={() => setOnboardMac(null)}
         />
       )}
     </div>

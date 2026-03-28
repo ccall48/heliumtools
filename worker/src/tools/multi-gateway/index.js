@@ -1,5 +1,7 @@
 import { corsHeaders, jsonResponse } from "../../lib/response.js";
-import { getOuiCache, refreshOuiCache } from "./oui-cache.js";
+import { getOuiCache } from "./oui-cache.js";
+import { handleBatchOnchainStatus } from "./handlers/onchain.js";
+import { handleIssueAndOnboard } from "./handlers/issue.js";
 
 const REGIONS = [
   { region: "US915", port: 4468 },
@@ -145,6 +147,36 @@ export async function handleMultiGatewayRequest(request, env, ctx) {
         ...corsHeaders,
       },
     });
+  }
+
+  // On-chain status check (batch)
+  if (pathname === "/onchain" && request.method === "POST") {
+    return handleBatchOnchainStatus(request, env);
+  }
+
+  // Issue data-only entity + onboard (Solana transactions)
+  const issueMatch = pathname.match(/^\/gateways\/([A-Fa-f0-9]{16})\/issue$/);
+  if (issueMatch && request.method === "POST") {
+    return handleIssueAndOnboard(issueMatch[1], request, env);
+  }
+
+  // Add gateway transaction proxy (legacy protobuf)
+  const addMatch = pathname.match(/^\/gateways\/([A-Fa-f0-9]{16})\/add$/);
+  if (addMatch && request.method === "POST") {
+    const mac = addMatch[1];
+    for (const { port } of REGIONS) {
+      const writeKey = env.MULTI_GATEWAY_WRITE_API_KEY || apiKey;
+      const res = await fetch(`http://${host}:${port}/gateways/${mac}/add`, {
+        method: "POST",
+        headers: { "X-API-Key": writeKey, "Content-Type": "application/json" },
+        body: await request.text(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return jsonResponse(data);
+      }
+    }
+    return jsonResponse({ error: "Gateway not found" }, 404);
   }
 
   if (pathname === "/ouis" && request.method === "GET") {
