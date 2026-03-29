@@ -5,6 +5,7 @@ import {
   HELIUM_ENTITY_MANAGER_PROGRAM_ID,
   HELIUM_SUB_DAOS_PROGRAM_ID,
   HNT_MINT,
+  IOT_MINT,
 } from "../../hotspot-claimer/config.js";
 import { fetchAccount } from "../../hotspot-claimer/services/common.js";
 
@@ -13,28 +14,43 @@ async function sha256(data) {
   return new Uint8Array(hashBuffer);
 }
 
-function deriveDAO() {
-  const [dao] = PublicKey.findProgramAddressSync(
-    [Buffer.from("dao"), new PublicKey(HNT_MINT).toBuffer()],
-    new PublicKey(HELIUM_SUB_DAOS_PROGRAM_ID),
-  );
-  return dao;
+const ENTITY_MANAGER = new PublicKey(HELIUM_ENTITY_MANAGER_PROGRAM_ID);
+const SUB_DAOS = new PublicKey(HELIUM_SUB_DAOS_PROGRAM_ID);
+
+const DAO = PublicKey.findProgramAddressSync(
+  [Buffer.from("dao"), new PublicKey(HNT_MINT).toBuffer()], SUB_DAOS,
+)[0];
+
+const IOT_SUB_DAO = PublicKey.findProgramAddressSync(
+  [Buffer.from("sub_dao"), new PublicKey(IOT_MINT).toBuffer()], SUB_DAOS,
+)[0];
+
+const REWARDABLE_ENTITY_CONFIG = PublicKey.findProgramAddressSync(
+  [Buffer.from("rewardable_entity_config"), IOT_SUB_DAO.toBuffer(), Buffer.from("IOT")], ENTITY_MANAGER,
+)[0];
+
+async function entityKeyHash(entityKey) {
+  const bytes = bs58.decode(entityKey);
+  return Buffer.from(await sha256(bytes));
 }
 
 async function deriveKeyToAssetPDA(entityKey) {
-  const entityKeyBytes = bs58.decode(entityKey);
-  const hash = await sha256(entityKeyBytes);
-  const dao = deriveDAO();
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("key_to_asset"), dao.toBuffer(), Buffer.from(hash)],
-    new PublicKey(HELIUM_ENTITY_MANAGER_PROGRAM_ID),
-  );
-  return pda;
+  const hash = await entityKeyHash(entityKey);
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("key_to_asset"), DAO.toBuffer(), hash], ENTITY_MANAGER,
+  )[0];
+}
+
+async function deriveIotInfoPDA(entityKey) {
+  const hash = await entityKeyHash(entityKey);
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("iot_info"), REWARDABLE_ENTITY_CONFIG.toBuffer(), hash], ENTITY_MANAGER,
+  )[0];
 }
 
 /**
  * Check on-chain status for a gateway's public key.
- * Returns { onchain, entity_url? }
+ * Returns { onchain, iot_onboarded, has_location, entity_url? }
  */
 export async function handleOnchainStatus(pubkey, env) {
   if (!pubkey) {
@@ -42,17 +58,31 @@ export async function handleOnchainStatus(pubkey, env) {
   }
 
   try {
-    const pda = await deriveKeyToAssetPDA(pubkey);
-    const account = await fetchAccount(env, pda);
+    const [ktaPda, iotPda] = await Promise.all([
+      deriveKeyToAssetPDA(pubkey),
+      deriveIotInfoPDA(pubkey),
+    ]);
+    const [ktaAccount, iotAccount] = await Promise.all([
+      fetchAccount(env, ktaPda),
+      fetchAccount(env, iotPda),
+    ]);
 
-    if (account) {
-      return jsonResponse({
-        onchain: true,
-        entity_url: `https://world.helium.com/network/iot/hotspot/${pubkey}`,
-      });
+    if (!ktaAccount) {
+      return jsonResponse({ onchain: false, iot_onboarded: false, has_location: false });
     }
 
-    return jsonResponse({ onchain: false });
+    const iot_onboarded = !!iotAccount;
+    // IotHotspotInfoV0: discriminator(8) + asset(32) + bump_seed(1) + location(Option<u64>)
+    // location at offset 41: 0x00 = None, 0x01 = Some
+    // fetchAccount returns a Buffer directly (not { data: Buffer })
+    const has_location = iot_onboarded && iotAccount[41] === 1;
+
+    return jsonResponse({
+      onchain: true,
+      iot_onboarded,
+      has_location,
+      entity_url: `https://world.helium.com/network/iot/hotspot/${pubkey}`,
+    });
   } catch (err) {
     return jsonResponse({ error: `Failed to check on-chain status: ${err.message}` }, 500);
   }
@@ -82,16 +112,29 @@ export async function handleBatchOnchainStatus(request, env) {
   const results = {};
   const checks = pubkeys.map(async (pubkey) => {
     try {
-      const pda = await deriveKeyToAssetPDA(pubkey);
-      const account = await fetchAccount(env, pda);
+      const [ktaPda, iotPda] = await Promise.all([
+        deriveKeyToAssetPDA(pubkey),
+        deriveIotInfoPDA(pubkey),
+      ]);
+      const [ktaAccount, iotAccount] = await Promise.all([
+        fetchAccount(env, ktaPda),
+        fetchAccount(env, iotPda),
+      ]);
+
+      const onchain = !!ktaAccount;
+      const iot_onboarded = !!iotAccount;
+      const has_location = iot_onboarded && iotAccount[41] === 1;
+
       results[pubkey] = {
-        onchain: !!account,
-        entity_url: account
+        onchain,
+        iot_onboarded,
+        has_location,
+        entity_url: onchain
           ? `https://world.helium.com/network/iot/hotspot/${pubkey}`
           : undefined,
       };
     } catch {
-      results[pubkey] = { onchain: false };
+      results[pubkey] = { onchain: false, iot_onboarded: false, has_location: false };
     }
   });
 

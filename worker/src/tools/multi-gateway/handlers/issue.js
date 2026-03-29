@@ -149,8 +149,8 @@ function encodeOptionI32(value) {
 function buildOnboardInstruction(owner, gatewayPubkeyB58, merkleTree, asset, proof, canopyDepth, opts = {}) {
   const disc = anchorDiscriminator("onboard_data_only_iot_hotspot_v0");
 
-  const dataHash = Buffer.from(asset.compression.data_hash.replace("0x", ""), "hex");
-  const creatorHash = Buffer.from(asset.compression.creator_hash.replace("0x", ""), "hex");
+  const dataHash = Buffer.from(bs58.decode(asset.compression.data_hash));
+  const creatorHash = Buffer.from(bs58.decode(asset.compression.creator_hash));
   const root = Buffer.from(bs58.decode(proof.root));
   const indexBuf = Buffer.alloc(4);
   indexBuf.writeUInt32LE(asset.compression.leaf_id);
@@ -393,8 +393,8 @@ export async function handleOnboard(mac, request, env) {
       return jsonResponse({ gateway: gatewayPubkey, already_onboarded: true });
     }
 
-    // KeyToAssetV0 layout: discriminator(8) + asset(32) + ...
-    const assetId = new PublicKey(ktaAccount.data.slice(8, 40)).toBase58();
+    // KeyToAssetV0 layout: discriminator(8) + dao(32) + asset(32) + ...
+    const assetId = new PublicKey(ktaAccount.data.slice(40, 72)).toBase58();
     const MERKLE_OFFSET = 8 + 32 + 1 + 32;
     const merkleTree = new PublicKey(configAccount.data.slice(MERKLE_OFFSET, MERKLE_OFFSET + 32));
 

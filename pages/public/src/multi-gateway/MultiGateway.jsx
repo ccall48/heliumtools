@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useMemo, useRef } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -15,7 +15,7 @@ import {
   requestOnboardTxn,
   createEventSource,
 } from "../lib/multiGatewayApi.js";
-import { latLngToCell } from "h3-js";
+import { latLngToCell, cellToBoundary } from "h3-js";
 import {
   truncateString,
   formatDuration,
@@ -39,7 +39,7 @@ import {
   ArrowDownCircleIcon as ArrowDownCircleSolidIcon,
   ArrowUpCircleIcon as ArrowUpCircleSolidIcon,
 } from "@heroicons/react/24/solid";
-import MapGL, { NavigationControl } from "react-map-gl/maplibre";
+import MapGL, { NavigationControl, Source, Layer } from "react-map-gl/maplibre";
 import { DeckGL } from "@deck.gl/react";
 import { ScatterplotLayer } from "@deck.gl/layers";
 import useDarkMode from "../lib/useDarkMode.js";
@@ -361,7 +361,7 @@ function RegionBadge({ region }) {
   );
 }
 
-function GatewayTable({ gateways, selectedMac, onSelect, onchainStatus, onOnboard }) {
+function GatewayTable({ gateways, selectedMac, onSelect, onchainStatus, onOnboard, onAssertLocation }) {
   if (gateways.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-surface-raised p-8 text-center shadow-soft">
@@ -454,31 +454,39 @@ function GatewayTable({ gateways, selectedMac, onSelect, onchainStatus, onOnboar
                   {(() => {
                     const status = onchainStatus?.[gw.public_key];
                     if (!status) return <span className="text-content-tertiary">—</span>;
-                    if (status.onchain) {
+                    if (!status.onchain) {
                       return (
-                        <a
-                          href={status.entity_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400"
-                          title="View on Helium World"
-                          onClick={(e) => e.stopPropagation()}
+                        <button
+                          className="rounded bg-accent px-2 py-0.5 text-[10px] font-medium text-white hover:opacity-90"
+                          title="Onboard this Hotspot"
+                          onClick={(e) => { e.stopPropagation(); onOnboard?.(gw.mac); }}
                         >
-                          ✓
-                        </a>
+                          Onboard
+                        </button>
+                      );
+                    }
+                    if (!status.iot_onboarded || !status.has_location) {
+                      return (
+                        <button
+                          className="rounded bg-amber-500 px-2 py-0.5 text-[10px] font-medium text-white hover:opacity-90"
+                          title={!status.iot_onboarded ? "Register on IoT network" : "Assert location"}
+                          onClick={(e) => { e.stopPropagation(); onAssertLocation?.(gw.mac); }}
+                        >
+                          {!status.iot_onboarded ? "Register" : "Set Location"}
+                        </button>
                       );
                     }
                     return (
-                      <button
-                        className="rounded bg-accent px-2 py-0.5 text-[10px] font-medium text-white hover:opacity-90"
-                        title="Onboard this Hotspot"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOnboard?.(gw.mac);
-                        }}
+                      <a
+                        href={status.entity_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400"
+                        title="View on Helium World"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        Onboard
-                      </button>
+                        ✓
+                      </a>
                     );
                   })()}
                 </td>
@@ -858,27 +866,181 @@ function GatewayMapModal({ gateways, onClose }) {
 }
 
 // ---------------------------------------------------------------------------
+// Location Step (map + h3 hex + fields)
+// ---------------------------------------------------------------------------
+
+function LocationStep({ lat, lng, heightAGL, gain, setLat, setLng, setHeightAGL, setGain,
+  loading, isDark, onSubmit, onSkip, inputClass }) {
+
+  const hasCoords = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
+  const initLat = hasCoords ? parseFloat(lat) : 37.77;
+  const initLng = hasCoords ? parseFloat(lng) : -122.42;
+
+  const [viewState, setViewState] = useState({
+    latitude: initLat,
+    longitude: initLng,
+    zoom: 16,
+  });
+
+  // Compute h3 cell boundary from map center
+  const h3Cell = useMemo(() => {
+    try {
+      return latLngToCell(viewState.latitude, viewState.longitude, 12);
+    } catch { return null; }
+  }, [viewState.latitude, viewState.longitude]);
+
+  const hexGeoJSON = useMemo(() => {
+    if (!h3Cell) return null;
+    const boundary = cellToBoundary(h3Cell, true); // [lng, lat] format
+    return {
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [boundary.concat([boundary[0]])] },
+    };
+  }, [h3Cell]);
+
+  // onMove only updates the local viewState (smooth dragging, no parent re-renders)
+  const handleMove = useCallback((evt) => {
+    setViewState(evt.viewState);
+  }, []);
+
+  // onMoveEnd flushes the final position to parent lat/lng state
+  const handleMoveEnd = useCallback((evt) => {
+    setLat(evt.viewState.latitude.toFixed(6));
+    setLng(evt.viewState.longitude.toFixed(6));
+  }, [setLat, setLng]);
+
+  // Sync text field edits back to map
+  const handleLatLngBlur = useCallback(() => {
+    const la = parseFloat(lat);
+    const lo = parseFloat(lng);
+    if (!isNaN(la) && !isNaN(lo)) {
+      setViewState((v) => ({ ...v, latitude: la, longitude: lo }));
+    }
+  }, [lat, lng]);
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+        <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+          Hotspot issued on-chain
+        </p>
+      </div>
+
+      <p className="text-sm font-medium text-content-primary">
+        Step 2: Assert Location
+      </p>
+      <p className="text-xs text-content-tertiary">
+        Drag the map to position the pin. The highlighted hex is the H3 cell that will be asserted.
+      </p>
+
+      {/* Map with fixed center pin and h3 hex overlay */}
+      <div className="relative h-56 overflow-hidden rounded-lg border border-border">
+        <MapGL
+          {...viewState}
+          onMove={handleMove}
+          onMoveEnd={handleMoveEnd}
+          mapStyle={isDark ? BASEMAP_DARK : BASEMAP_LIGHT}
+          attributionControl={false}
+        >
+          {hexGeoJSON && (
+            <Source type="geojson" data={hexGeoJSON}>
+              <Layer id="h3-hex-fill" type="fill" paint={{ "fill-color": "#8b5cf6", "fill-opacity": 0.25 }} />
+              <Layer id="h3-hex-outline" type="line" paint={{ "line-color": "#8b5cf6", "line-width": 2 }} />
+            </Source>
+          )}
+        </MapGL>
+        {/* Fixed center pin */}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="relative -mt-5">
+            <svg width="24" height="36" viewBox="0 0 24 36" className="drop-shadow-lg">
+              <path d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z" fill="#8b5cf6" />
+              <circle cx="12" cy="12" r="5" fill="white" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs font-medium text-content-secondary">Latitude</label>
+          <input type="text" value={lat} onChange={(e) => setLat(e.target.value)}
+            onBlur={handleLatLngBlur} placeholder="e.g. 37.7749" className={inputClass} />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-content-secondary">Longitude</label>
+          <input type="text" value={lng} onChange={(e) => setLng(e.target.value)}
+            onBlur={handleLatLngBlur} placeholder="e.g. -122.4194" className={inputClass} />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-content-secondary">Height AGL (m)</label>
+          <input type="text" value={heightAGL} onChange={(e) => setHeightAGL(e.target.value)}
+            placeholder="above ground level" className={inputClass} />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-content-secondary">Gain (dBi)</label>
+          <input type="text" value={gain} onChange={(e) => setGain(e.target.value)}
+            placeholder="e.g. 1.2" className={inputClass} />
+        </div>
+      </div>
+
+      <button
+        onClick={onSubmit}
+        disabled={loading}
+        className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+      >
+        {loading ? "Preparing..." : "Assert Location"}
+      </button>
+
+      <button
+        onClick={onSkip}
+        disabled={loading}
+        className="w-full text-xs text-content-tertiary hover:text-content-secondary"
+      >
+        Skip location, register without
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Onboard Modal
 // ---------------------------------------------------------------------------
 
-function OnboardModal({ gateway, onClose }) {
+function OnboardModal({ gateway, onClose, initialStep = "issue" }) {
   if (!gateway) return null;
   const { mac, public_key: publicKey } = gateway;
   const { connected, publicKey: walletPubkey, sendTransaction } = useWallet();
   const { connection } = useConnection();
+  const isDark = useDarkMode();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("wallet"); // "wallet" | "cli"
 
   // Step tracking: "issue" → "location" → "onboard" → "done"
-  const [step, setStep] = useState("issue");
+  const [step, setStep] = useState(initialStep);
   const [txSignature, setTxSignature] = useState(null);
 
   // Location form (pre-filled from gateway GPS if available)
   const [lat, setLat] = useState(() => gateway?.latitude?.toString() || "");
   const [lng, setLng] = useState(() => gateway?.longitude?.toString() || "");
-  const [elevation, setElevation] = useState(() => gateway?.altitude?.toString() || "");
-  const [gain, setGain] = useState("12"); // 1.2 dBi default
+  const [heightAGL, setHeightAGL] = useState(""); // height above ground level (m)
+  const [gain, setGain] = useState("1.2"); // dBi
+
+  // Auto-compute height above ground when lat/lng are available
+  useEffect(() => {
+    if (!lat || !lng || !gateway?.altitude) return;
+    const gpsAlt = gateway.altitude;
+    fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lng}`)
+      .then((r) => r.json())
+      .then((data) => {
+        const groundElev = data?.results?.[0]?.elevation;
+        if (groundElev != null) {
+          const agl = Math.max(0, Math.round(gpsAlt - groundElev));
+          setHeightAGL(agl.toString());
+        }
+      })
+      .catch(() => {}); // silently fail — user can enter manually
+  }, [lat, lng, gateway?.altitude]);
 
   // CLI state
   const [cliWallet, setCliWallet] = useState("");
@@ -928,15 +1090,15 @@ function OnboardModal({ gateway, onClose }) {
     try {
       const effectiveLat = overrides?.lat ?? lat;
       const effectiveLng = overrides?.lng ?? lng;
-      const effectiveElevation = overrides?.elevation ?? elevation;
+      const effectiveHeight = overrides?.elevation ?? heightAGL;
       const effectiveGain = overrides?.gain ?? gain;
 
       const opts = {};
       if (effectiveLat && effectiveLng) {
         opts.location = latLngToCell(parseFloat(effectiveLat), parseFloat(effectiveLng), 12);
       }
-      if (effectiveElevation) opts.elevation = parseInt(effectiveElevation, 10);
-      if (effectiveGain) opts.gain = parseInt(effectiveGain, 10);
+      if (effectiveHeight) opts.elevation = parseInt(effectiveHeight, 10);
+      if (effectiveGain) opts.gain = Math.round(parseFloat(effectiveGain) * 10);
 
       const result = await requestOnboardTxn(mac, walletPubkey.toBase58(), opts);
 
@@ -1056,7 +1218,7 @@ function OnboardModal({ gateway, onClose }) {
                       disabled={loading}
                       className="mt-2 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
                     >
-                      {loading ? "Preparing..." : "Step 1: Issue Hotspot"}
+                      {loading ? "Preparing..." : "Create On-Chain Entity"}
                     </button>
                   </div>
                 )}
@@ -1073,59 +1235,14 @@ function OnboardModal({ gateway, onClose }) {
 
             {/* Step 2: Location assertion */}
             {step === "location" && (
-              <div className="space-y-3">
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-                  <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                    Hotspot issued on-chain
-                  </p>
-                </div>
-
-                <p className="text-sm font-medium text-content-primary">
-                  Step 2: Register on IoT Network
-                </p>
-                <p className="text-xs text-content-tertiary">
-                  Optionally set a location, elevation, and antenna gain.
-                </p>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-content-secondary">Latitude</label>
-                    <input type="text" value={lat} onChange={(e) => setLat(e.target.value)}
-                      placeholder="e.g. 37.7749" className={inputClass} />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-content-secondary">Longitude</label>
-                    <input type="text" value={lng} onChange={(e) => setLng(e.target.value)}
-                      placeholder="e.g. -122.4194" className={inputClass} />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-content-secondary">Elevation (m)</label>
-                    <input type="text" value={elevation} onChange={(e) => setElevation(e.target.value)}
-                      placeholder="e.g. 47" className={inputClass} />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-content-secondary">Gain (dBi x10)</label>
-                    <input type="text" value={gain} onChange={(e) => setGain(e.target.value)}
-                      placeholder="e.g. 12 = 1.2 dBi" className={inputClass} />
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleOnboardWithWallet}
-                  disabled={loading}
-                  className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-                >
-                  {loading ? "Preparing..." : "Register on IoT Network"}
-                </button>
-
-                <button
-                  onClick={() => handleOnboardWithWallet({ lat: "", lng: "", elevation: "", gain: "" })}
-                  disabled={loading}
-                  className="w-full text-xs text-content-tertiary hover:text-content-secondary"
-                >
-                  Skip location, register without
-                </button>
-              </div>
+              <LocationStep
+                lat={lat} lng={lng} heightAGL={heightAGL} gain={gain}
+                setLat={setLat} setLng={setLng} setHeightAGL={setHeightAGL} setGain={setGain}
+                loading={loading} isDark={isDark}
+                onSubmit={handleOnboardWithWallet}
+                onSkip={() => handleOnboardWithWallet({ lat: "", lng: "", elevation: "", gain: "" })}
+                inputClass={inputClass}
+              />
             )}
 
             {(step === "onboarding" || step === "confirming_onboard") && (
@@ -1257,6 +1374,7 @@ export default function MultiGateway() {
   const [ouiLookup, setOuiLookup] = useState(() => () => null);
   const [onchainStatus, setOnchainStatus] = useState({});
   const [onboardMac, setOnboardMac] = useState(null);
+  const [onboardInitialStep, setOnboardInitialStep] = useState("issue");
 
   // Check on-chain status when gateways load
   useEffect(() => {
@@ -1335,7 +1453,8 @@ export default function MultiGateway() {
             selectedMac={selectedMac}
             onSelect={selectMac}
             onchainStatus={onchainStatus}
-            onOnboard={setOnboardMac}
+            onOnboard={(mac) => { setOnboardInitialStep("issue"); setOnboardMac(mac); }}
+            onAssertLocation={(mac) => { setOnboardInitialStep("location"); setOnboardMac(mac); }}
           />
         </div>
 
@@ -1360,6 +1479,7 @@ export default function MultiGateway() {
       {onboardMac && (
         <OnboardModal
           gateway={gateways.find((g) => g.mac === onboardMac)}
+          initialStep={onboardInitialStep}
           onClose={() => setOnboardMac(null)}
         />
       )}
