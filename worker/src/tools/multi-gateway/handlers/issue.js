@@ -117,24 +117,51 @@ function buildIssueInstruction(owner, gatewayPubkeyB58, merkleTree, collection) 
   return new TransactionInstruction({ keys: accounts, programId: ENTITY_MANAGER, data });
 }
 
+// Borsh Option encoding helpers
+function encodeOptionU64(hexStr) {
+  if (!hexStr) return Buffer.from([0]);
+  const buf = Buffer.alloc(9);
+  buf[0] = 1;
+  buf.writeBigUInt64LE(BigInt("0x" + hexStr), 1);
+  return buf;
+}
+
+function encodeOptionI32(value) {
+  if (value === null || value === undefined) return Buffer.from([0]);
+  const buf = Buffer.alloc(5);
+  buf[0] = 1;
+  buf.writeInt32LE(value, 1);
+  return buf;
+}
+
 /**
  * Build the onboardDataOnlyIotHotspotV0 instruction.
  * Requires the asset's compression proof from DAS.
+ *
+ * @param {PublicKey} owner
+ * @param {string} gatewayPubkeyB58
+ * @param {PublicKey} merkleTree
+ * @param {object} asset - DAS getAsset response
+ * @param {object} proof - { root: string (base58), proof: string[] }
+ * @param {number} canopyDepth - number of proof nodes to trim (stored on-chain)
+ * @param {{ location?: string, elevation?: number, gain?: number }} opts
  */
-function buildOnboardInstruction(owner, gatewayPubkeyB58, merkleTree, asset, proof) {
-  // OnboardDataOnlyIotHotspotArgsV0 { data_hash, creator_hash, index, root, elevation, gain, location }
+function buildOnboardInstruction(owner, gatewayPubkeyB58, merkleTree, asset, proof, canopyDepth, opts = {}) {
   const disc = anchorDiscriminator("onboard_data_only_iot_hotspot_v0");
 
-  const dataHash = Buffer.from(asset.compression.data_hash.slice(2), "hex"); // 32 bytes
-  const creatorHash = Buffer.from(asset.compression.creator_hash.slice(2), "hex"); // 32 bytes
+  const dataHash = Buffer.from(asset.compression.data_hash.replace("0x", ""), "hex");
+  const creatorHash = Buffer.from(asset.compression.creator_hash.replace("0x", ""), "hex");
+  const root = Buffer.from(bs58.decode(proof.root));
   const indexBuf = Buffer.alloc(4);
   indexBuf.writeUInt32LE(asset.compression.leaf_id);
-  const root = Buffer.from(bs58.decode(proof.root));
 
-  // elevation: Option<i32> = None (0x00)
-  // gain: Option<i32> = None (0x00)
-  // location: Option<u64> = None (0x00)
-  const data = Buffer.concat([disc, dataHash, creatorHash, indexBuf, root, Buffer.from([0, 0, 0])]);
+  // IDL field order: dataHash, creatorHash, root, index, location, elevation, gain
+  const data = Buffer.concat([
+    disc, dataHash, creatorHash, root, indexBuf,
+    encodeOptionU64(opts.location),       // H3 cell hex string → u64
+    encodeOptionI32(opts.elevation),      // meters
+    encodeOptionI32(opts.gain),           // dBi × 10
+  ]);
 
   const accounts = [
     { pubkey: owner, isSigner: true, isWritable: true },                     // payer
@@ -158,12 +185,53 @@ function buildOnboardInstruction(owner, gatewayPubkeyB58, merkleTree, asset, pro
     { pubkey: SUB_DAOS, isSigner: false, isWritable: false },                // helium_sub_daos_program
   ];
 
-  // Add proof accounts as remaining accounts
-  for (const proofKey of proof.proof) {
+  // Proof accounts, trimmed by canopy depth (upper nodes are stored on-chain)
+  const proofPath = proof.proof.slice(0, proof.proof.length - canopyDepth);
+  for (const proofKey of proofPath) {
     accounts.push({ pubkey: new PublicKey(proofKey), isSigner: false, isWritable: false });
   }
 
   return new TransactionInstruction({ keys: accounts, programId: ENTITY_MANAGER, data });
+}
+
+// ---- DAS API helpers ----
+
+async function fetchAsset(rpcUrl, assetId) {
+  const res = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAsset", params: { id: assetId } }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(`getAsset: ${data.error.message}`);
+  return data.result;
+}
+
+async function fetchAssetProof(rpcUrl, assetId) {
+  const res = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAssetProof", params: { id: assetId } }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(`getAssetProof: ${data.error.message}`);
+  return data.result;
+}
+
+/**
+ * Compute canopy depth from merkle tree account data.
+ * SPL Account Compression layout:
+ *   header(56) + tree(24 + maxBufferSize * (40 + maxDepth*32) + maxDepth*32) + canopy
+ */
+function getCanopyDepth(treeAccountData) {
+  const maxBufferSize = treeAccountData.readUInt32LE(2);
+  const maxDepth = treeAccountData.readUInt32LE(6);
+  const headerSize = 56; // accountType(1) + version(1) + maxBufferSize(4) + maxDepth(4) + authority(32) + creationSlot(8) + padding(6)
+  const changeLogEntrySize = 32 + maxDepth * 32 + 4 + 4;
+  const treeDataSize = 24 + maxBufferSize * changeLogEntrySize + maxDepth * 32;
+  const canopyBytes = treeAccountData.length - headerSize - treeDataSize;
+  if (canopyBytes <= 0) return 0;
+  return Math.floor(Math.log2(canopyBytes / 32 + 2)) - 1;
 }
 
 /**
@@ -287,5 +355,109 @@ export async function handleIssueAndOnboard(mac, request, env) {
     });
   } catch (err) {
     return jsonResponse({ error: `Failed to build transactions: ${err.message}` }, 500);
+  }
+}
+
+/**
+ * Handler: construct onboardDataOnlyIotHotspotV0 transaction.
+ * Called after issue succeeds and DAS has indexed the asset.
+ * POST /gateways/{mac}/onboard
+ * Body: { owner, location?, elevation?, gain? }
+ *   location: H3 resolution-12 cell index as hex string (e.g. "8c283474434d1ff")
+ *   elevation: altitude in meters (integer)
+ *   gain: antenna gain in dBi × 10 (integer, e.g. 12 = 1.2 dBi)
+ */
+export async function handleOnboard(mac, request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+
+  const { owner: ownerStr, location, elevation, gain } = body;
+  if (!ownerStr) return jsonResponse({ error: "Missing owner address" }, 400);
+
+  let ownerPubkey;
+  try {
+    ownerPubkey = new PublicKey(ownerStr);
+  } catch {
+    return jsonResponse({ error: "Invalid owner address" }, 400);
+  }
+
+  // Find gateway across all regions in parallel
+  const host = env.MULTI_GATEWAY_HOST || "hotspot.heliumtools.org";
+  const apiKey = env.MULTI_GATEWAY_API_KEY;
+
+  const probes = await Promise.allSettled(
+    REGIONS.map(({ port }) =>
+      fetch(`http://${host}:${port}/gateways/${mac}`, { headers: { "X-API-Key": apiKey } })
+        .then(async (res) => res.ok ? await res.json() : null)
+    )
+  );
+  const found = probes.find(r => r.status === "fulfilled" && r.value)?.value;
+  if (!found) return jsonResponse({ error: "Gateway not found" }, 404);
+
+  const gatewayPubkey = found.public_key;
+
+  try {
+    const rpcUrl = env.SOLANA_RPC_URL;
+    const connection = new Connection(rpcUrl);
+
+    // Read keyToAsset PDA to find the compressed NFT asset ID
+    // KeyToAssetV0 layout: discriminator(8) + asset(32) + ...
+    const ktaKey = keyToAssetKey(gatewayPubkey);
+    const ktaAccount = await connection.getAccountInfo(ktaKey);
+    if (!ktaAccount) {
+      return jsonResponse({ error: "Gateway not yet issued on-chain. Run issue step first." }, 400);
+    }
+    const assetId = new PublicKey(ktaAccount.data.slice(8, 40)).toBase58();
+
+    // Check if already onboarded (iot_info PDA exists)
+    const iotInfo = iotInfoKey(gatewayPubkey);
+    const iotInfoAccount = await connection.getAccountInfo(iotInfo);
+    if (iotInfoAccount) {
+      return jsonResponse({ gateway: gatewayPubkey, already_onboarded: true });
+    }
+
+    // Fetch compressed NFT data and merkle proof from DAS API
+    const [asset, proof, { blockhash }] = await Promise.all([
+      fetchAsset(rpcUrl, assetId),
+      fetchAssetProof(rpcUrl, assetId),
+      connection.getLatestBlockhash(),
+    ]);
+
+    const merkleTree = new PublicKey(asset.compression.tree);
+
+    // Get canopy depth from the merkle tree account
+    const treeAccount = await connection.getAccountInfo(merkleTree);
+    if (!treeAccount) {
+      return jsonResponse({ error: "Merkle tree account not found" }, 500);
+    }
+    const canopyDepth = getCanopyDepth(treeAccount.data);
+
+    const onboardIx = buildOnboardInstruction(
+      ownerPubkey, gatewayPubkey, merkleTree, asset, proof, canopyDepth,
+      { location: location || null, elevation: elevation ?? null, gain: gain ?? null },
+    );
+
+    const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 });
+    const computePriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 });
+
+    const message = new TransactionMessage({
+      payerKey: ownerPubkey,
+      recentBlockhash: blockhash,
+      instructions: [computeBudgetIx, computePriceIx, onboardIx],
+    }).compileToLegacyMessage();
+
+    const vtx = new VersionedTransaction(message);
+
+    return jsonResponse({
+      gateway: gatewayPubkey,
+      already_onboarded: false,
+      transaction: Buffer.from(vtx.serialize()).toString("base64"),
+    });
+  } catch (err) {
+    return jsonResponse({ error: `Failed to build onboard transaction: ${err.message}` }, 500);
   }
 }

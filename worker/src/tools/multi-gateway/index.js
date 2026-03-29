@@ -1,7 +1,7 @@
 import { corsHeaders, jsonResponse } from "../../lib/response.js";
 import { getOuiCache } from "./oui-cache.js";
 import { handleBatchOnchainStatus } from "./handlers/onchain.js";
-import { handleIssueAndOnboard } from "./handlers/issue.js";
+import { handleIssueAndOnboard, handleOnboard } from "./handlers/issue.js";
 import { REGIONS } from "./regions.js";
 
 function getHost(env) {
@@ -146,10 +146,16 @@ export async function handleMultiGatewayRequest(request, env, ctx) {
     return handleBatchOnchainStatus(request, env);
   }
 
-  // Issue data-only entity + onboard (Solana transactions)
+  // Issue data-only entity (Solana transaction)
   const issueMatch = pathname.match(/^\/gateways\/([A-Fa-f0-9]{16})\/issue$/);
   if (issueMatch && request.method === "POST") {
     return handleIssueAndOnboard(issueMatch[1], request, env);
+  }
+
+  // Onboard on IoT network + optional location assertion
+  const onboardMatch = pathname.match(/^\/gateways\/([A-Fa-f0-9]{16})\/onboard$/);
+  if (onboardMatch && request.method === "POST") {
+    return handleOnboard(onboardMatch[1], request, env);
   }
 
   // Add gateway transaction proxy (legacy protobuf)

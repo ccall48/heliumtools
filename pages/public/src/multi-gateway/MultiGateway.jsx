@@ -12,8 +12,10 @@ import {
   fetchOuis,
   checkOnchainStatus,
   requestIssueTxns,
+  requestOnboardTxn,
   createEventSource,
 } from "../lib/multiGatewayApi.js";
+import { latLngToCell } from "h3-js";
 import {
   truncateString,
   formatDuration,
@@ -859,57 +861,103 @@ function GatewayMapModal({ gateways, onClose }) {
 // Onboard Modal
 // ---------------------------------------------------------------------------
 
-function OnboardModal({ mac, publicKey, onClose }) {
+function OnboardModal({ gateway, onClose }) {
+  const mac = gateway?.mac;
+  const publicKey = gateway?.public_key;
   const { connected, publicKey: walletPubkey, sendTransaction } = useWallet();
   const { connection } = useConnection();
-  const [txnData, setTxnData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("wallet"); // "wallet" | "cli"
 
-  const [issueStatus, setIssueStatus] = useState(null); // null | "signing" | "confirming" | "done" | "error"
+  // Step tracking: "issue" → "location" → "onboard" → "done"
+  const [step, setStep] = useState("issue");
   const [txSignature, setTxSignature] = useState(null);
+
+  // Location form (pre-filled from gateway GPS if available)
+  const [lat, setLat] = useState(() => gateway?.latitude?.toString() || "");
+  const [lng, setLng] = useState(() => gateway?.longitude?.toString() || "");
+  const [elevation, setElevation] = useState(() => gateway?.altitude?.toString() || "");
+  const [gain, setGain] = useState("12"); // 1.2 dBi default
+
+  // CLI state
+  const [cliWallet, setCliWallet] = useState("");
+  const [txnData, setTxnData] = useState(null);
+
+  // ---- Wallet tab handlers ----
 
   const handleIssueWithWallet = async () => {
     if (!walletPubkey || !sendTransaction) return;
     setLoading(true);
     setError(null);
-    setIssueStatus("signing");
+    setStep("issuing");
     try {
       const result = await requestIssueTxns(mac, walletPubkey.toBase58());
 
       if (result.already_issued) {
-        setIssueStatus("done");
-        setTxSignature("already_issued");
+        setStep("location");
         setLoading(false);
         return;
       }
 
-      if (!result.transactions || result.transactions.length === 0) {
-        throw new Error("No transactions returned");
-      }
+      if (!result.transactions?.length) throw new Error("No transactions returned");
 
-      // Deserialize and sign each transaction
       for (const txnInfo of result.transactions) {
         const txn = VersionedTransaction.deserialize(Buffer.from(txnInfo.transaction, "base64"));
-        setIssueStatus("signing");
         const sig = await sendTransaction(txn, connection);
-        setIssueStatus("confirming");
+        setStep("confirming_issue");
         await connection.confirmTransaction(sig, "confirmed");
         setTxSignature(sig);
       }
 
-      setIssueStatus("done");
+      setStep("location");
     } catch (err) {
       console.error("Issue failed:", err);
       setError(err.message);
-      setIssueStatus("error");
+      setStep("issue");
     } finally {
       setLoading(false);
     }
   };
 
-  const [cliWallet, setCliWallet] = useState("");
+  const handleOnboardWithWallet = async () => {
+    if (!walletPubkey || !sendTransaction) return;
+    setLoading(true);
+    setError(null);
+    setStep("onboarding");
+    try {
+      const opts = {};
+      if (lat && lng) {
+        opts.location = latLngToCell(parseFloat(lat), parseFloat(lng), 12);
+      }
+      if (elevation) opts.elevation = parseInt(elevation, 10);
+      if (gain) opts.gain = parseInt(gain, 10);
+
+      const result = await requestOnboardTxn(mac, walletPubkey.toBase58(), opts);
+
+      if (result.already_onboarded) {
+        setStep("done");
+        setLoading(false);
+        return;
+      }
+
+      const txn = VersionedTransaction.deserialize(Buffer.from(result.transaction, "base64"));
+      const sig = await sendTransaction(txn, connection);
+      setStep("confirming_onboard");
+      await connection.confirmTransaction(sig, "confirmed");
+      setTxSignature(sig);
+      setStep("done");
+    } catch (err) {
+      console.error("Onboard failed:", err);
+      setError(err.message);
+      setStep("location");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ---- CLI tab handler ----
+
   const handleGenerateForCli = async () => {
     if (!cliWallet.trim()) return;
     setLoading(true);
@@ -919,10 +967,7 @@ function OnboardModal({ mac, publicKey, onClose }) {
       if (result.already_issued) {
         setTxnData({ already_issued: true });
       } else if (result.transactions?.length > 0) {
-        setTxnData({
-          gateway: result.gateway,
-          transaction: result.transactions[0].transaction,
-        });
+        setTxnData({ transaction: result.transactions[0].transaction });
       } else {
         throw new Error("No transactions returned");
       }
@@ -933,6 +978,8 @@ function OnboardModal({ mac, publicKey, onClose }) {
       setLoading(false);
     }
   };
+
+  const inputClass = "mt-1 w-full rounded-lg border border-border bg-surface-inset px-3 py-2 font-mono text-sm text-content-primary placeholder:text-content-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
 
   return (
     <div
@@ -985,43 +1032,113 @@ function OnboardModal({ mac, publicKey, onClose }) {
           <p className="mt-3 text-sm text-rose-500">{error}</p>
         )}
 
-        {/* Wallet tab */}
+        {/* ==================== WALLET TAB ==================== */}
         {tab === "wallet" && (
           <div className="mt-4">
-            <div className="flex justify-center">
-              <WalletMultiButton />
-            </div>
-            {connected && walletPubkey && !issueStatus && (
-              <div className="mt-3">
-                <p className="text-xs text-content-secondary">
-                  Connected: <span className="font-mono">{truncateString(walletPubkey.toBase58(), 8, 4)}</span>
+            {/* Step 1: Issue */}
+            {step === "issue" && (
+              <>
+                <div className="flex justify-center">
+                  <WalletMultiButton />
+                </div>
+                {connected && walletPubkey && (
+                  <div className="mt-3">
+                    <p className="text-xs text-content-secondary">
+                      Connected: <span className="font-mono">{truncateString(walletPubkey.toBase58(), 8, 4)}</span>
+                    </p>
+                    <button
+                      onClick={handleIssueWithWallet}
+                      disabled={loading}
+                      className="mt-2 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                    >
+                      {loading ? "Preparing..." : "Step 1: Issue Hotspot"}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {(step === "issuing" || step === "confirming_issue") && (
+              <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-500/10 p-3">
+                <p className="text-sm text-sky-600 dark:text-sky-400">
+                  {step === "issuing" ? "Waiting for wallet signature..." : "Confirming issue on Solana..."}
                 </p>
+              </div>
+            )}
+
+            {/* Step 2: Location assertion */}
+            {step === "location" && (
+              <div className="space-y-3">
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+                  <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                    Hotspot issued on-chain
+                  </p>
+                </div>
+
+                <p className="text-sm font-medium text-content-primary">
+                  Step 2: Register on IoT Network
+                </p>
+                <p className="text-xs text-content-tertiary">
+                  Optionally set a location, elevation, and antenna gain.
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-content-secondary">Latitude</label>
+                    <input type="text" value={lat} onChange={(e) => setLat(e.target.value)}
+                      placeholder="e.g. 37.7749" className={inputClass} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-content-secondary">Longitude</label>
+                    <input type="text" value={lng} onChange={(e) => setLng(e.target.value)}
+                      placeholder="e.g. -122.4194" className={inputClass} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-content-secondary">Elevation (m)</label>
+                    <input type="text" value={elevation} onChange={(e) => setElevation(e.target.value)}
+                      placeholder="e.g. 47" className={inputClass} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-content-secondary">Gain (dBi x10)</label>
+                    <input type="text" value={gain} onChange={(e) => setGain(e.target.value)}
+                      placeholder="e.g. 12 = 1.2 dBi" className={inputClass} />
+                  </div>
+                </div>
+
                 <button
-                  onClick={handleIssueWithWallet}
+                  onClick={handleOnboardWithWallet}
                   disabled={loading}
-                  className="mt-2 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                  className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
                 >
-                  {loading ? "Preparing..." : "Onboard Hotspot"}
+                  {loading ? "Preparing..." : "Register on IoT Network"}
+                </button>
+
+                <button
+                  onClick={() => { setLat(""); setLng(""); setElevation(""); handleOnboardWithWallet(); }}
+                  disabled={loading}
+                  className="w-full text-xs text-content-tertiary hover:text-content-secondary"
+                >
+                  Skip location, register without
                 </button>
               </div>
             )}
-            {issueStatus === "signing" && (
+
+            {(step === "onboarding" || step === "confirming_onboard") && (
               <div className="mt-3 rounded-lg border border-sky-500/30 bg-sky-500/10 p-3">
-                <p className="text-sm text-sky-600 dark:text-sky-400">Waiting for wallet signature...</p>
+                <p className="text-sm text-sky-600 dark:text-sky-400">
+                  {step === "onboarding" ? "Waiting for wallet signature..." : "Confirming onboard on Solana..."}
+                </p>
               </div>
             )}
-            {issueStatus === "confirming" && (
-              <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-                <p className="text-sm text-amber-600 dark:text-amber-400">Confirming on Solana...</p>
-              </div>
-            )}
-            {issueStatus === "done" && (
+
+            {/* Done */}
+            {step === "done" && (
               <div className="mt-3 space-y-3">
                 <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
                   <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                    {txSignature === "already_issued" ? "Hotspot already issued on-chain!" : "Hotspot issued successfully!"}
+                    Hotspot onboarded successfully!
                   </p>
-                  {txSignature && txSignature !== "already_issued" && (
+                  {txSignature && (
                     <a
                       href={`https://solscan.io/tx/${txSignature}`}
                       target="_blank"
@@ -1043,7 +1160,7 @@ function OnboardModal({ mac, publicKey, onClose }) {
           </div>
         )}
 
-        {/* CLI tab */}
+        {/* ==================== CLI TAB ==================== */}
         {tab === "cli" && !txnData && (
           <div className="mt-4">
             <label className="block text-sm font-medium text-content-secondary">
@@ -1054,7 +1171,7 @@ function OnboardModal({ mac, publicKey, onClose }) {
               value={cliWallet}
               onChange={(e) => setCliWallet(e.target.value)}
               placeholder="Enter your Solana wallet address"
-              className="mt-1 w-full rounded-lg border border-border bg-surface-inset px-3 py-2 font-mono text-sm text-content-primary placeholder:text-content-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              className={inputClass}
               onKeyDown={(e) => e.key === "Enter" && handleGenerateForCli()}
             />
             <button
@@ -1067,8 +1184,8 @@ function OnboardModal({ mac, publicKey, onClose }) {
           </div>
         )}
 
-        {/* Transaction result */}
-        {txnData && (
+        {/* CLI transaction result */}
+        {tab === "cli" && txnData && (
           <div className="mt-4 space-y-4">
             {txnData.already_issued ? (
               <>
@@ -1077,10 +1194,11 @@ function OnboardModal({ mac, publicKey, onClose }) {
                     Hotspot already issued on-chain!
                   </p>
                 </div>
-                <button
-                  onClick={onClose}
-                  className="w-full rounded-lg border border-border px-4 py-2 text-sm text-content-secondary hover:bg-surface-inset"
-                >
+                <p className="text-xs text-content-tertiary">
+                  Use <code className="rounded bg-surface-inset px-1 py-0.5">helium-wallet hotspots add data-only</code> to complete onboarding and assert location via CLI.
+                </p>
+                <button onClick={onClose}
+                  className="w-full rounded-lg border border-border px-4 py-2 text-sm text-content-secondary hover:bg-surface-inset">
                   Done
                 </button>
               </>
@@ -1088,10 +1206,10 @@ function OnboardModal({ mac, publicKey, onClose }) {
               <>
                 <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
                   <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                    Transaction ready for signing
+                    Issue transaction ready
                   </p>
                   <p className="mt-1 text-xs text-content-secondary">
-                    This Solana transaction is pre-signed by the ECC verifier. Sign it with your wallet keypair and submit to the network.
+                    Sign this transaction, then use <code className="rounded bg-surface-inset px-1 py-0.5">helium-wallet</code> to onboard and assert location.
                   </p>
                 </div>
 
@@ -1107,21 +1225,8 @@ function OnboardModal({ mac, publicKey, onClose }) {
                   </div>
                 </div>
 
-                <div className="rounded-lg bg-surface-inset p-3 text-xs text-content-secondary space-y-1.5">
-                  <p className="font-medium text-content-primary">Sign and submit:</p>
-                  <code className="block whitespace-pre-wrap break-all">
-{`const tx = VersionedTransaction.deserialize(
-  Buffer.from("${truncateString(txnData.transaction, 20, 8)}", "base64")
-);
-tx.sign([yourKeypair]);
-connection.sendTransaction(tx);`}
-                  </code>
-                </div>
-
-                <button
-                  onClick={onClose}
-                  className="w-full rounded-lg border border-border px-4 py-2 text-sm text-content-secondary hover:bg-surface-inset"
-                >
+                <button onClick={onClose}
+                  className="w-full rounded-lg border border-border px-4 py-2 text-sm text-content-secondary hover:bg-surface-inset">
                   Done
                 </button>
               </>
@@ -1249,8 +1354,7 @@ export default function MultiGateway() {
 
       {onboardMac && (
         <OnboardModal
-          mac={onboardMac}
-          publicKey={gateways.find((g) => g.mac === onboardMac)?.public_key}
+          gateway={gateways.find((g) => g.mac === onboardMac)}
           onClose={() => setOnboardMac(null)}
         />
       )}

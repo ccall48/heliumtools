@@ -65,3 +65,15 @@ export async function requestAddGatewayTxn(mac, owner, payer) {
   if (!data) throw new Error("Empty response from server");
   return data;
 }
+
+export async function requestOnboardTxn(mac, owner, { location, elevation, gain } = {}) {
+  const res = await fetch(`${API_BASE}/gateways/${mac}/onboard`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner, location, elevation, gain }),
+  });
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error(data?.error || `Server returned ${res.status}`);
+  if (!data) throw new Error("Empty response from server");
+  return data;
+}
