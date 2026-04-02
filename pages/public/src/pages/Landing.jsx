@@ -136,7 +136,7 @@ export default function Landing() {
       {/* Hero with dithering shader */}
       <div className="relative h-[280px] sm:h-[300px] lg:h-[328px] overflow-hidden">
         <ShaderDithering className="absolute inset-0 w-full h-full" />
-        <div className="relative flex h-full flex-col justify-center gap-4 px-4 sm:px-6 lg:px-12 max-w-3xl">
+        <div className="relative mx-auto flex h-full max-w-7xl flex-col justify-center gap-4 px-4 sm:px-6 lg:px-12">
           <p className="font-mono text-[13px] font-medium uppercase tracking-[0.08em] text-cyan-300">
             Open-source operator tools
           </p>
