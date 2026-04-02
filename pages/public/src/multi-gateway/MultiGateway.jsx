@@ -6,6 +6,8 @@ import { VersionedTransaction } from "@solana/web3.js";
 import Header from "../components/Header.jsx";
 import StatusBanner from "../components/StatusBanner.jsx";
 import CopyButton from "../components/CopyButton.jsx";
+import DcMintModal from "../dc-mint/DcMintModal.jsx";
+import { DC_MINT as DC_MINT_KEY } from "../dc-mint/constants.js";
 import {
   fetchGateways,
   fetchGatewayPackets,
@@ -32,7 +34,9 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   PlusIcon,
+  CheckCircleIcon,
   QuestionMarkCircleIcon,
+  XCircleIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import {
@@ -47,6 +51,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 const BASEMAP_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const BASEMAP_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
+// Onboarding cost constants
+const ISSUE_SOL_COST = 0.002;     // SOL for the issue step (account rent)
+const ONBOARD_SOL_COST = 0.004;   // SOL for both steps combined
+const ONBOARD_DC_COST = 100000;   // 100,000 DC ($1) for IoT network registration
 
 
 /**
@@ -870,7 +879,7 @@ function GatewayMapModal({ gateways, onClose }) {
 // ---------------------------------------------------------------------------
 
 function LocationStep({ lat, lng, heightAGL, gain, setLat, setLng, setHeightAGL, setGain,
-  loading, isDark, onSubmit, onSkip, inputClass }) {
+  loading, isDark, onSubmit, onSkip, inputClass, dcSufficient = true, onMintDc }) {
 
   const hasCoords = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
   const initLat = hasCoords ? parseFloat(lat) : 37.77;
@@ -983,9 +992,20 @@ function LocationStep({ lat, lng, heightAGL, gain, setLat, setLng, setHeightAGL,
         </div>
       </div>
 
+      {!dcSufficient && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 dark:text-amber-300 dark:bg-amber-950/40 dark:border-amber-800/50 rounded-lg p-2.5 space-y-1">
+          <p>100,000 Data Credits required for this step.</p>
+          {onMintDc && (
+            <button onClick={onMintDc} className="font-medium text-accent hover:underline">
+              Mint DC from HNT
+            </button>
+          )}
+        </div>
+      )}
+
       <button
         onClick={onSubmit}
-        disabled={loading}
+        disabled={loading || !dcSufficient}
         className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
       >
         {loading ? "Preparing..." : "Assert Location"}
@@ -993,11 +1013,65 @@ function LocationStep({ lat, lng, heightAGL, gain, setLat, setLng, setHeightAGL,
 
       <button
         onClick={onSkip}
-        disabled={loading}
+        disabled={loading || !dcSufficient}
         className="w-full text-xs text-content-tertiary hover:text-content-secondary"
       >
         Skip location, register without
       </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Onboard Cost Disclosure
+// ---------------------------------------------------------------------------
+
+function OnboardCostCard({ solBalance, dcBalance, solSufficient, dcSufficient, balancesLoaded, onMintDc }) {
+  return (
+    <div className="rounded-lg bg-surface-inset p-3 text-xs space-y-1.5">
+      <p className="font-medium text-content-primary">Onboarding costs</p>
+      <div className="flex justify-between text-content-secondary">
+        <span>Create on-chain entity</span>
+        <span className="font-mono">~0.002 SOL</span>
+      </div>
+      <div className="flex justify-between text-content-secondary">
+        <span>Onboard and assert location</span>
+        <span className="font-mono">~0.002 SOL + 100,000 DC ($1)</span>
+      </div>
+      {balancesLoaded && (
+        <>
+          <div className="border-t border-border-muted pt-1.5 flex justify-between items-center font-medium text-content-primary">
+            <span>Your balance</span>
+            <span className="flex items-center gap-1.5 font-mono">
+              <span className="flex items-center gap-0.5">
+                {solSufficient
+                  ? <CheckCircleIcon className="h-3.5 w-3.5 text-emerald-500" />
+                  : <XCircleIcon className="h-3.5 w-3.5 text-rose-500" />}
+                {solBalance.toFixed(4)} SOL
+              </span>
+              <span className="flex items-center gap-0.5">
+                {dcSufficient
+                  ? <CheckCircleIcon className="h-3.5 w-3.5 text-emerald-500" />
+                  : <XCircleIcon className="h-3.5 w-3.5 text-rose-500" />}
+                {dcBalance.toLocaleString()} DC
+              </span>
+            </span>
+          </div>
+          {!solSufficient && (
+            <p className="text-amber-500">Insufficient SOL. Need ~0.004 SOL for both steps.</p>
+          )}
+          {!dcSufficient && (
+            <div className="text-amber-500 space-y-1">
+              <p>100,000 Data Credits required for full onboard.</p>
+              {onMintDc && (
+                <button onClick={onMintDc} className="text-xs font-medium text-accent hover:underline">
+                  Mint DC from HNT
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1041,6 +1115,38 @@ function OnboardModal({ gateway, onClose, initialStep = "issue" }) {
       })
       .catch(() => {}); // silently fail — user can enter manually
   }, [lat, lng, gateway?.altitude]);
+
+  // Wallet balance checks
+  const [solBalance, setSolBalance] = useState(null);
+  const [dcBalance, setDcBalance] = useState(null);
+  const [showDcMintModal, setShowDcMintModal] = useState(false);
+  const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (!connected || !walletPubkey || !connection) return;
+    let cancelled = false;
+
+    async function fetchBalances() {
+      try {
+        const [sol, tokenAccounts] = await Promise.all([
+          connection.getBalance(walletPubkey),
+          connection.getParsedTokenAccountsByOwner(walletPubkey, { mint: DC_MINT_KEY }),
+        ]);
+        if (cancelled) return;
+        setSolBalance(sol / 1e9);
+        const dcAccount = tokenAccounts.value[0];
+        setDcBalance(dcAccount ? Number(dcAccount.account.data.parsed.info.tokenAmount.amount) : 0);
+      } catch {
+        if (!cancelled) { setSolBalance(null); setDcBalance(null); }
+      }
+    }
+    fetchBalances();
+    return () => { cancelled = true; };
+  }, [connected, walletPubkey, connection, balanceRefreshKey]);
+
+  const balancesLoaded = solBalance !== null;
+  const solSufficient = balancesLoaded && solBalance >= ONBOARD_SOL_COST;
+  const dcSufficient = !balancesLoaded || dcBalance >= ONBOARD_DC_COST;
 
   // CLI state
   const [cliWallet, setCliWallet] = useState("");
@@ -1209,14 +1315,22 @@ function OnboardModal({ gateway, onClose, initialStep = "issue" }) {
                   <WalletMultiButton />
                 </div>
                 {connected && walletPubkey && (
-                  <div className="mt-3">
+                  <div className="mt-3 space-y-3">
                     <p className="text-xs text-content-secondary">
                       Connected: <span className="font-mono">{truncateString(walletPubkey.toBase58(), 8, 4)}</span>
                     </p>
+
+                    <OnboardCostCard
+                      solBalance={solBalance} dcBalance={dcBalance}
+                      solSufficient={solSufficient} dcSufficient={dcSufficient}
+                      balancesLoaded={balancesLoaded}
+                      onMintDc={() => setShowDcMintModal(true)}
+                    />
+
                     <button
                       onClick={handleIssueWithWallet}
-                      disabled={loading}
-                      className="mt-2 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                      disabled={loading || !balancesLoaded || (solBalance < ISSUE_SOL_COST)}
+                      className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
                     >
                       {loading ? "Preparing..." : "Create On-Chain Entity"}
                     </button>
@@ -1242,6 +1356,8 @@ function OnboardModal({ gateway, onClose, initialStep = "issue" }) {
                 onSubmit={handleOnboardWithWallet}
                 onSkip={() => handleOnboardWithWallet({ lat: "", lng: "", elevation: "", gain: "" })}
                 inputClass={inputClass}
+                dcSufficient={dcSufficient}
+                onMintDc={() => setShowDcMintModal(true)}
               />
             )}
 
@@ -1284,7 +1400,8 @@ function OnboardModal({ gateway, onClose, initialStep = "issue" }) {
 
         {/* ==================== CLI TAB ==================== */}
         {tab === "cli" && !txnData && (
-          <div className="mt-4">
+          <div className="mt-4 space-y-3">
+            <OnboardCostCard />
             <label className="block text-sm font-medium text-content-secondary">
               Wallet Address (Solana)
             </label>
@@ -1299,7 +1416,7 @@ function OnboardModal({ gateway, onClose, initialStep = "issue" }) {
             <button
               onClick={handleGenerateForCli}
               disabled={loading || !cliWallet.trim()}
-              className="mt-3 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
               {loading ? "Generating..." : "Generate Issue Transaction"}
             </button>
@@ -1354,6 +1471,14 @@ function OnboardModal({ gateway, onClose, initialStep = "issue" }) {
               </>
             )}
           </div>
+        )}
+
+        {showDcMintModal && (
+          <DcMintModal
+            onClose={() => setShowDcMintModal(false)}
+            onSuccess={() => { setShowDcMintModal(false); setBalanceRefreshKey((k) => k + 1); }}
+            defaultDcAmount={ONBOARD_DC_COST}
+          />
         )}
       </div>
     </div>
