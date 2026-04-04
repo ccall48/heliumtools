@@ -12,8 +12,10 @@ import {
 } from "../lib/dcMintApi.js";
 import { truncateString } from "../lib/utils.js";
 import { HNT_MINT, DC_MINT } from "./constants.js";
+import { confirmAndVerify, cleanInt, cleanDecimal } from "./solanaUtils.js";
 
 const INPUT_CLASS = "w-full rounded-lg border border-border bg-surface-inset px-3 py-2 font-mono text-sm text-content-primary placeholder:text-content-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
+
 
 // ---------------------------------------------------------------------------
 // Conversion Preview
@@ -171,7 +173,7 @@ function MintTab({ hntPrice, hntBalance, dcBalance, hasHntAta, hasDcAta, onBalan
       const txn = VersionedTransaction.deserialize(Buffer.from(result.transaction, "base64"));
       const sig = await sendTransaction(txn, connection);
       setStatus("confirming");
-      await connection.confirmTransaction(sig, "confirmed");
+      await confirmAndVerify(connection, sig);
       setTxSignature(sig);
       setStatus("done");
       onBalanceChange?.();
@@ -230,7 +232,8 @@ function MintTab({ hntPrice, hntBalance, dcBalance, hasHntAta, hasDcAta, onBalan
         <label className="block text-xs font-medium text-content-secondary">
           {inputMode === "hnt" ? "HNT to burn" : "DC to mint"}
         </label>
-        <input type="text" value={amount} onChange={(e) => setAmount(e.target.value)}
+        <input type="text" value={amount}
+          onChange={(e) => setAmount(inputMode === "hnt" ? cleanDecimal(e.target.value) : cleanInt(e.target.value))}
           placeholder={inputMode === "hnt" ? "e.g. 0.5" : "e.g. 100000"} className={INPUT_CLASS + " mt-1"} />
       </div>
 
@@ -400,7 +403,7 @@ function DelegateTab({ hntPrice, dcBalance, hasDcAta, onBalanceChange }) {
       const txn = VersionedTransaction.deserialize(Buffer.from(result.transaction, "base64"));
       const sig = await sendTransaction(txn, connection);
       setStatus("confirming");
-      await connection.confirmTransaction(sig, "confirmed");
+      await confirmAndVerify(connection, sig);
       setTxSignature(sig);
       setStatus("done");
       onBalanceChange?.();
@@ -485,7 +488,8 @@ function DelegateTab({ hntPrice, dcBalance, hasDcAta, onBalanceChange }) {
           {inputMode === "dc" ? "DC to delegate" :
            burnMode === "dc_target" ? "DC to deliver" : "HNT to burn"}
         </label>
-        <input type="text" value={amount} onChange={(e) => setAmount(e.target.value)}
+        <input type="text" value={amount}
+          onChange={(e) => setAmount(inputMode === "hnt" && burnMode === "hnt_burn" ? cleanDecimal(e.target.value) : cleanInt(e.target.value))}
           placeholder={inputMode === "dc" ? "e.g. 100000" :
             burnMode === "dc_target" ? "e.g. 100000" : "e.g. 0.5"}
           className={INPUT_CLASS + " mt-1"} />
