@@ -45,3 +45,25 @@ export function decodeWifiConnect(buffer) {
 export function encodeWifiRemove(ssid) {
   return WifiRemoveMsg.encode({ service: ssid }).finish();
 }
+
+// add_gateway_v1 { bytes owner = 1; bytes payer = 2; }
+const AddGatewayReqMsg = new protobuf.Type('add_gateway_v1')
+  .add(new protobuf.Field('owner', 1, 'bytes'))
+  .add(new protobuf.Field('payer', 2, 'bytes'));
+root.add(AddGatewayReqMsg);
+
+// add_gateway_response_v1 { bytes add_gateway_txn = 1; }
+// The response from the ECC chip is the full signed add_gateway protobuf
+// which contains the unsigned txn + gateway signature.
+const AddGatewayRespMsg = new protobuf.Type('add_gateway_response_v1')
+  .add(new protobuf.Field('add_gateway_txn', 1, 'bytes'));
+root.add(AddGatewayRespMsg);
+
+export function encodeAddGateway(ownerBytes, payerBytes) {
+  return AddGatewayReqMsg.encode({ owner: ownerBytes, payer: payerBytes }).finish();
+}
+
+export function decodeAddGatewayResponse(buffer) {
+  const msg = AddGatewayRespMsg.decode(new Uint8Array(buffer));
+  return msg.add_gateway_txn || null;
+}

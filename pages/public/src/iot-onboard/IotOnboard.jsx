@@ -1,7 +1,17 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { VersionedTransaction } from '@solana/web3.js';
+import bs58 from 'bs58';
+import { latLngToCell, cellToBoundary } from 'h3-js';
+import MapGL, { Source, Layer } from 'react-map-gl/maplibre';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import Header from '../components/Header.jsx';
 import StatusBanner from '../components/StatusBanner.jsx';
 import CopyButton from '../components/CopyButton.jsx';
+import { confirmAndVerify } from '../dc-mint/solanaUtils.js';
+import { lookupHotspot, requestIssue, requestOnboard } from '../lib/iotOnboardApi.js';
+import useDarkMode from '../lib/useDarkMode.js';
 import useHotspotBle from './useHotspotBle.js';
 import {
   SignalIcon,
@@ -11,7 +21,17 @@ import {
   XMarkIcon,
   EyeIcon,
   EyeSlashIcon,
+  CheckCircleIcon,
+  XCircleIcon,
 } from '@heroicons/react/24/outline';
+
+const BASEMAP_LIGHT = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
+const BASEMAP_DARK = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+
+// Onboarding cost constants
+const ONBOARD_SOL_COST = 0.004;
+const DATA_ONLY_DC_COST = 100_000;      // 100K DC ($1) for data-only
+const FULL_ONBOARD_DC_COST = 4_000_000; // 4M DC ($40) for full PoC
 
 const WIFI_STATUS_MAP = {
   'init':        { text: 'Initializing...', tone: 'loading' },
@@ -349,6 +369,469 @@ function WifiPanel({
   );
 }
 
+// ---------------------------------------------------------------------------
+// OnboardPanel — full on-chain onboarding flow
+// ---------------------------------------------------------------------------
+
+function OnboardPanel({ ble }) {
+  const { connected, publicKey: walletPubkey, sendTransaction } = useWallet();
+  const { connection } = useConnection();
+  const isDark = useDarkMode();
+
+  // Lookup state
+  const [lookupData, setLookupData] = useState(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupError, setLookupError] = useState(null);
+
+  // Step machine: lookup → issue → mode_select → location → onboard → done
+  const [step, setStep] = useState('lookup');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [txSignature, setTxSignature] = useState(null);
+  const [onboardMode, setOnboardMode] = useState(null); // "full" | "data_only"
+
+  // Location fields
+  const [lat, setLat] = useState('');
+  const [lng, setLng] = useState('');
+  const [elevation, setElevation] = useState('');
+  const [gain, setGain] = useState('1.2');
+
+  const inputClass = 'mt-1 w-full rounded-lg border border-border bg-surface-inset px-3 py-2 font-mono text-sm text-content placeholder:text-content-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent';
+
+  // Auto-lookup when connected
+  useEffect(() => {
+    if (!ble.onboardingKey && !ble.pubkey) return;
+    let cancelled = false;
+    setLookupLoading(true);
+    setLookupError(null);
+
+    lookupHotspot(ble.onboardingKey, ble.pubkey)
+      .then((data) => {
+        if (cancelled) return;
+        setLookupData(data);
+
+        // Determine initial step from on-chain status
+        const onchain = data.onchain;
+        if (onchain.onboarded && onchain.has_location) {
+          setStep('done');
+        } else if (onchain.onboarded && !onchain.has_location) {
+          setStep('location');
+          setOnboardMode(data.hotspot_type === 'full' ? 'full' : 'data_only');
+        } else if (onchain.issued) {
+          // Issued but not onboarded — decide mode
+          if (data.maker?.dc_sufficient) {
+            setOnboardMode('full');
+            setStep('location');
+          } else {
+            setStep('mode_select');
+          }
+        } else {
+          setStep('issue');
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLookupError(err.message);
+        setStep('issue'); // Fall through to issue even if lookup fails
+      })
+      .finally(() => { if (!cancelled) setLookupLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [ble.onboardingKey, ble.pubkey]);
+
+  // Auto-fetch elevation from lat/lng
+  useEffect(() => {
+    if (!lat || !lng || isNaN(parseFloat(lat)) || isNaN(parseFloat(lng))) return;
+    let cancelled = false;
+    fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lng}`)
+      .then(r => r.json())
+      .then(data => {
+        const groundElev = data?.results?.[0]?.elevation;
+        if (!cancelled && groundElev != null) setElevation(String(Math.round(groundElev)));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [lat, lng]);
+
+  // Map state for location step
+  const hasCoords = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
+  const initLat = hasCoords ? parseFloat(lat) : 37.77;
+  const initLng = hasCoords ? parseFloat(lng) : -122.42;
+  const [viewState, setViewState] = useState({ latitude: initLat, longitude: initLng, zoom: 16 });
+
+  const h3Cell = useMemo(() => {
+    try { return latLngToCell(viewState.latitude, viewState.longitude, 12); }
+    catch { return null; }
+  }, [viewState.latitude, viewState.longitude]);
+
+  const hexGeoJSON = useMemo(() => {
+    if (!h3Cell) return null;
+    const boundary = cellToBoundary(h3Cell, true);
+    return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [boundary.concat([boundary[0]])] } };
+  }, [h3Cell]);
+
+  const handleMove = useCallback((evt) => setViewState(evt.viewState), []);
+  const handleMoveEnd = useCallback((evt) => {
+    setLat(evt.viewState.latitude.toFixed(6));
+    setLng(evt.viewState.longitude.toFixed(6));
+  }, []);
+
+  const handleLatLngBlur = useCallback(() => {
+    const la = parseFloat(lat);
+    const lo = parseFloat(lng);
+    if (!isNaN(la) && !isNaN(lo)) setViewState(v => ({ ...v, latitude: la, longitude: lo }));
+  }, [lat, lng]);
+
+  const locationComplete = lat && lng && elevation && gain
+    && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng))
+    && !isNaN(parseInt(elevation)) && !isNaN(parseFloat(gain));
+
+  // --- Handlers ---
+
+  const handleIssue = async () => {
+    if (!walletPubkey || !ble.pubkey) return;
+    setLoading(true);
+    setError(null);
+    try {
+      // Get ECC chip signature via BLE
+      const ownerBytes = walletPubkey.toBytes();
+      const addGatewayHex = await ble.writeAddGateway(ownerBytes, ownerBytes);
+
+      // Build issue transaction on worker
+      const result = await requestIssue(
+        walletPubkey.toBase58(),
+        ble.pubkey,
+        { unsigned_msg: addGatewayHex, gateway_signature: addGatewayHex },
+      );
+
+      if (result.already_issued) {
+        if (lookupData?.maker?.dc_sufficient) {
+          setOnboardMode('full');
+          setStep('location');
+        } else {
+          setStep('mode_select');
+        }
+        return;
+      }
+
+      const txn = VersionedTransaction.deserialize(Buffer.from(result.transaction, 'base64'));
+      const sig = await sendTransaction(txn, connection);
+      await confirmAndVerify(connection, sig);
+      setTxSignature(sig);
+
+      if (lookupData?.maker?.dc_sufficient) {
+        setOnboardMode('full');
+        setStep('location');
+      } else {
+        setStep('mode_select');
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOnboard = async () => {
+    if (!walletPubkey || !ble.pubkey || !locationComplete) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const h3Hex = latLngToCell(parseFloat(lat), parseFloat(lng), 12);
+      const result = await requestOnboard(
+        walletPubkey.toBase58(),
+        ble.pubkey,
+        {
+          location: h3Hex,
+          elevation: parseInt(elevation, 10),
+          gain: Math.round(parseFloat(gain) * 10),
+          mode: onboardMode || 'data_only',
+        },
+      );
+
+      if (result.already_onboarded) {
+        setStep('done');
+        return;
+      }
+
+      const txn = VersionedTransaction.deserialize(Buffer.from(result.transaction, 'base64'));
+      const sig = await sendTransaction(txn, connection);
+      await confirmAndVerify(connection, sig);
+      setTxSignature(sig);
+      setStep('done');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Render ---
+
+  return (
+    <div className="rounded-xl border border-border bg-surface-raised">
+      <div className="flex items-center justify-between p-4 border-b border-border">
+        <h3 className="font-display font-semibold text-content">On-Chain Onboarding</h3>
+        {lookupLoading && <ArrowPathIcon className="h-4 w-4 animate-spin text-content-tertiary" />}
+      </div>
+
+      <div className="p-4 space-y-4">
+        {lookupError && <StatusBanner tone="warning" message={`Lookup: ${lookupError}`} />}
+        {error && <StatusBanner tone="error" message={error} />}
+
+        {/* Maker info card */}
+        {lookupData?.maker && (
+          <div className="rounded-lg bg-surface-inset p-3 text-xs space-y-1.5">
+            <p className="font-medium text-content">Maker Info</p>
+            <div className="flex justify-between text-content-secondary">
+              <span>Name</span>
+              <span className="font-mono">{lookupData.maker.name || 'Unknown'}</span>
+            </div>
+            <div className="flex justify-between text-content-secondary">
+              <span>DC Balance</span>
+              <span className="flex items-center gap-1 font-mono">
+                {lookupData.maker.dc_sufficient
+                  ? <CheckCircleIcon className="h-3.5 w-3.5 text-emerald-500" />
+                  : <XCircleIcon className="h-3.5 w-3.5 text-rose-500" />}
+                {lookupData.maker.dc_balance.toLocaleString()} DC
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* On-chain status summary */}
+        {lookupData?.onchain && (
+          <div className="rounded-lg bg-surface-inset p-3 text-xs space-y-1.5">
+            <p className="font-medium text-content">On-Chain Status</p>
+            <div className="flex justify-between text-content-secondary">
+              <span>Issued</span>
+              <span className={lookupData.onchain.issued ? 'text-emerald-600 dark:text-emerald-400' : ''}>
+                {lookupData.onchain.issued ? 'Yes' : 'No'}
+              </span>
+            </div>
+            <div className="flex justify-between text-content-secondary">
+              <span>Onboarded (IoT)</span>
+              <span className={lookupData.onchain.onboarded ? 'text-emerald-600 dark:text-emerald-400' : ''}>
+                {lookupData.onchain.onboarded ? 'Yes' : 'No'}
+              </span>
+            </div>
+            <div className="flex justify-between text-content-secondary">
+              <span>Location Asserted</span>
+              <span className={lookupData.onchain.has_location ? 'text-emerald-600 dark:text-emerald-400' : ''}>
+                {lookupData.onchain.has_location ? 'Yes' : 'No'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Step: Issue */}
+        {step === 'issue' && (
+          <div className="space-y-3">
+            <p className="text-sm font-medium text-content">Step 1: Issue Hotspot On-Chain</p>
+            <p className="text-xs text-content-tertiary">
+              Connect your wallet and sign a transaction to issue this Hotspot as a compressed NFT on Solana.
+            </p>
+            <div className="rounded-lg bg-surface-inset p-3 text-xs space-y-1">
+              <div className="flex justify-between text-content-secondary">
+                <span>Estimated cost</span>
+                <span className="font-mono">~0.002 SOL</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <WalletMultiButton className="!rounded-lg !text-sm !h-9" />
+              {connected && (
+                <button
+                  onClick={handleIssue}
+                  disabled={loading}
+                  className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {loading ? 'Issuing...' : 'Issue Hotspot'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Step: Mode select (only when maker has insufficient DC) */}
+        {step === 'mode_select' && (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+              <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                Hotspot issued on-chain
+              </p>
+            </div>
+            <p className="text-sm font-medium text-content">Step 2: Choose Onboarding Mode</p>
+            <p className="text-xs text-content-tertiary">
+              This Hotspot's maker does not have sufficient DC. Choose how to onboard:
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
+                onClick={() => { setOnboardMode('full'); setStep('location'); }}
+                className="rounded-lg border border-border p-4 text-left hover:border-accent transition space-y-1"
+              >
+                <p className="text-sm font-medium text-content">Full Onboard</p>
+                <p className="text-xs text-content-tertiary">
+                  Proof of Coverage eligible. You pay the DC fee.
+                </p>
+                <p className="text-xs font-mono text-content-secondary">
+                  ~{ONBOARD_SOL_COST} SOL + {FULL_ONBOARD_DC_COST.toLocaleString()} DC
+                </p>
+              </button>
+              <button
+                onClick={() => { setOnboardMode('data_only'); setStep('location'); }}
+                className="rounded-lg border border-border p-4 text-left hover:border-accent transition space-y-1"
+              >
+                <p className="text-sm font-medium text-content">Data-Only</p>
+                <p className="text-xs text-content-tertiary">
+                  Data transfer only, no Proof of Coverage.
+                </p>
+                <p className="text-xs font-mono text-content-secondary">
+                  ~{ONBOARD_SOL_COST} SOL + {DATA_ONLY_DC_COST.toLocaleString()} DC
+                </p>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step: Location */}
+        {step === 'location' && (
+          <div className="space-y-3">
+            {lookupData?.onchain?.issued && (
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+                <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                  Hotspot issued on-chain
+                </p>
+              </div>
+            )}
+            <p className="text-sm font-medium text-content">
+              {lookupData?.onchain?.onboarded ? 'Assert Location' : 'Step 3: Assert Location & Onboard'}
+            </p>
+            <p className="text-xs text-content-tertiary">
+              Drag the map to position the pin. The highlighted hex is the H3 cell that will be asserted.
+            </p>
+
+            {/* Map */}
+            <div className="relative h-56 overflow-hidden rounded-lg border border-border">
+              <MapGL
+                {...viewState}
+                onMove={handleMove}
+                onMoveEnd={handleMoveEnd}
+                mapStyle={isDark ? BASEMAP_DARK : BASEMAP_LIGHT}
+                attributionControl={false}
+              >
+                {hexGeoJSON && (
+                  <Source type="geojson" data={hexGeoJSON}>
+                    <Layer id="h3-hex-fill" type="fill" paint={{ 'fill-color': '#8b5cf6', 'fill-opacity': 0.25 }} />
+                    <Layer id="h3-hex-outline" type="line" paint={{ 'line-color': '#8b5cf6', 'line-width': 2 }} />
+                  </Source>
+                )}
+              </MapGL>
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="relative -mt-5">
+                  <svg width="24" height="36" viewBox="0 0 24 36" className="drop-shadow-lg">
+                    <path d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z" fill="#8b5cf6" />
+                    <circle cx="12" cy="12" r="5" fill="white" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-content-secondary">Latitude</label>
+                <input type="text" value={lat} onChange={(e) => setLat(e.target.value)}
+                  onBlur={handleLatLngBlur} placeholder="e.g. 37.7749" className={inputClass} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-content-secondary">Longitude</label>
+                <input type="text" value={lng} onChange={(e) => setLng(e.target.value)}
+                  onBlur={handleLatLngBlur} placeholder="e.g. -122.4194" className={inputClass} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-content-secondary">Elevation (m)</label>
+                <input type="text" value={elevation} onChange={(e) => setElevation(e.target.value)}
+                  placeholder="above ground level" className={inputClass} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-content-secondary">Gain (dBi)</label>
+                <input type="text" value={gain} onChange={(e) => setGain(e.target.value)}
+                  placeholder="e.g. 1.2" className={inputClass} />
+              </div>
+            </div>
+
+            {/* Cost card */}
+            <div className="rounded-lg bg-surface-inset p-3 text-xs space-y-1.5">
+              <p className="font-medium text-content">Onboarding costs</p>
+              <div className="flex justify-between text-content-secondary">
+                <span>Mode</span>
+                <span className="font-mono">
+                  {onboardMode === 'full' ? 'Full (PoC eligible)' : 'Data-Only'}
+                </span>
+              </div>
+              <div className="flex justify-between text-content-secondary">
+                <span>Estimated cost</span>
+                <span className="font-mono">
+                  ~{ONBOARD_SOL_COST} SOL
+                  {lookupData?.maker?.dc_sufficient
+                    ? ' (maker pays DC)'
+                    : ` + ${(onboardMode === 'full' ? FULL_ONBOARD_DC_COST : DATA_ONLY_DC_COST).toLocaleString()} DC`
+                  }
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {!connected && <WalletMultiButton className="!rounded-lg !text-sm !h-9" />}
+              <button
+                onClick={handleOnboard}
+                disabled={loading || !connected || !locationComplete}
+                className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {loading ? 'Onboarding...' : 'Onboard & Assert Location'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step: Done */}
+        {step === 'done' && (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+              <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                Hotspot onboarded successfully
+              </p>
+            </div>
+            {txSignature && (
+              <a
+                href={`https://solscan.io/tx/${txSignature}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-accent hover:underline"
+              >
+                View transaction on Solscan
+              </a>
+            )}
+            {ble.pubkey && (
+              <a
+                href={`https://world.helium.com/network/iot/hotspot/${ble.pubkey}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-sm text-accent hover:underline"
+              >
+                View Hotspot on Helium World
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export default function IotOnboard() {
   const ble = useHotspotBle();
   const bleSupported = typeof navigator !== 'undefined' && !!navigator.bluetooth;
@@ -362,11 +845,11 @@ export default function IotOnboard() {
             IoT Hotspot Setup
           </p>
           <h1 className="text-3xl sm:text-4xl font-display font-bold text-content tracking-[-0.03em] mb-4">
-            Hotspot Diagnostics
+            Hotspot Setup & Onboarding
           </h1>
           <p className="text-lg text-content-secondary">
             Connect to a Helium IoT Hotspot over Bluetooth to view diagnostics,
-            configure WiFi, and verify device identity.
+            configure WiFi, and onboard your Hotspot to the IoT network.
           </p>
         </div>
 
@@ -433,6 +916,8 @@ export default function IotOnboard() {
                 onRemove={ble.removeWifi}
               />
             </div>
+
+            <OnboardPanel ble={ble} />
           </div>
         )}
       </main>

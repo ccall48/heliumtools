@@ -6,6 +6,8 @@ import {
   decodeWifiServices,
   encodeWifiConnect,
   encodeWifiRemove,
+  encodeAddGateway,
+  decodeAddGatewayResponse,
 } from './bleProto.js';
 
 const decoder = new TextDecoder();
@@ -246,6 +248,56 @@ export default function useHotspotBle() {
     } catch {}
   }, []);
 
+  /**
+   * Write add_gateway protobuf to the Hotspot ECC chip and read back
+   * the signed response. Returns the raw signed txn bytes as a hex string
+   * for the worker to parse and verify.
+   */
+  const writeAddGateway = useCallback(async (ownerBytes, payerBytes) => {
+    if (!serviceRef.current) throw new Error('Not connected');
+    log('Requesting add_gateway from ECC chip...');
+
+    const char = await serviceRef.current.getCharacteristic(Characteristic.ADD_GATEWAY);
+    await char.startNotifications();
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          char.removeEventListener('characteristicvaluechanged', handler);
+          reject(new Error('add_gateway response timed out'));
+        }, 30_000);
+
+        function handler(event) {
+          clearTimeout(timer);
+          char.removeEventListener('characteristicvaluechanged', handler);
+          resolve(dataViewToBytes(event.target.value));
+        }
+        char.addEventListener('characteristicvaluechanged', handler);
+
+        const payload = encodeAddGateway(ownerBytes, payerBytes);
+        char.writeValue(payload).catch((err) => {
+          clearTimeout(timer);
+          char.removeEventListener('characteristicvaluechanged', handler);
+          reject(err);
+        });
+      });
+
+      log('ECC chip signed add_gateway');
+      const txnBytes = decodeAddGatewayResponse(result);
+      if (!txnBytes || txnBytes.length === 0) {
+        throw new Error('Empty add_gateway response from Hotspot');
+      }
+
+      const hex = Array.from(new Uint8Array(txnBytes))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+
+      return hex;
+    } finally {
+      try { await char.stopNotifications(); } catch {}
+    }
+  }, [log]);
+
   // Detect silent disconnects via periodic GATT liveness check
   useEffect(() => {
     if (status !== 'connected') return;
@@ -287,5 +339,6 @@ export default function useHotspotBle() {
     connectWifi,
     removeWifi,
     identifyLights,
+    writeAddGateway,
   };
 }
