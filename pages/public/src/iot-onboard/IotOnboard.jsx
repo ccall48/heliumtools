@@ -386,7 +386,7 @@ function OnboardPanel({ ble }) {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState(null);
 
-  // Step machine: lookup → issue → mode_select → location → onboard → done
+  // Step machine: lookup → issue → location → onboard → done
   const [step, setStep] = useState('lookup');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -421,14 +421,10 @@ function OnboardPanel({ ble }) {
           setStep('location');
           setOnboardMode(data.hotspot_type === 'full' ? 'full' : 'data_only');
         } else if (onchain.issued) {
-          // Issued but not onboarded — decide mode
-          if (data.maker?.dc_sufficient) {
-            setOnboardMode('full');
-            setStep('location');
-          } else {
-            setStep('mode_select');
-          }
+          if (data.maker?.dc_sufficient) setOnboardMode('full');
+          setStep('location');
         } else {
+          if (data.maker?.dc_sufficient) setOnboardMode('full');
           setStep('issue');
         }
       })
@@ -511,12 +507,7 @@ function OnboardPanel({ ble }) {
       );
 
       if (result.already_issued) {
-        if (lookupData?.maker?.dc_sufficient) {
-          setOnboardMode('full');
-          setStep('location');
-        } else {
-          setStep('mode_select');
-        }
+        setStep('location');
         return;
       }
 
@@ -524,13 +515,7 @@ function OnboardPanel({ ble }) {
       const sig = await sendTransaction(txn, connection);
       await confirmAndVerify(connection, sig);
       setTxSignature(sig);
-
-      if (lookupData?.maker?.dc_sufficient) {
-        setOnboardMode('full');
-        setStep('location');
-      } else {
-        setStep('mode_select');
-      }
+      setStep('location');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -630,10 +615,50 @@ function OnboardPanel({ ble }) {
           </div>
         )}
 
+        {/* Mode selector — always visible when maker can't cover DC */}
+        {lookupData && !lookupData.maker?.dc_sufficient && step !== 'done' && (
+          <div className="space-y-3">
+            {lookupData.maker?.name && !onboardMode && (
+              <StatusBanner
+                tone="warning"
+                message={`This Hotspot's maker (${lookupData.maker.name}) does not have sufficient Data Credits to cover the onboarding fee. You will need to pay the DC cost from your own wallet.`}
+              />
+            )}
+            <p className="text-xs font-mono uppercase tracking-widest text-content-tertiary">Onboarding Mode</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                { key: 'full', title: 'Full Onboard (PoC)', desc: 'Earns IOT rewards for wireless coverage.', cost: `${FULL_ONBOARD_DC_COST.toLocaleString()} DC` },
+                { key: 'data_only', title: 'Data-Only', desc: 'Eligible for data transfer rewards only.', cost: `${DATA_ONLY_DC_COST.toLocaleString()} DC` },
+              ].map(({ key, title, desc, cost }) => (
+                <button
+                  key={key}
+                  onClick={() => setOnboardMode(key)}
+                  className={`relative rounded-lg border p-4 text-left transition-all duration-150 space-y-1 ${
+                    onboardMode === key
+                      ? 'border-accent bg-accent/10 scale-[1.02] shadow-sm'
+                      : 'border-border hover:border-accent'
+                  }`}
+                >
+                  {onboardMode === key && (
+                    <div className="absolute top-3 right-3">
+                      <CheckCircleIcon className="h-5 w-5 text-accent" />
+                    </div>
+                  )}
+                  <p className="text-sm font-medium text-content">{title}</p>
+                  <p className="text-xs text-content-tertiary">{desc}</p>
+                  <p className="pt-1 text-xs font-mono text-content-secondary">~{ONBOARD_SOL_COST} SOL + {cost}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Step: Issue */}
         {step === 'issue' && (
           <div className="space-y-3">
-            <p className="text-sm font-medium text-content">Step 1: Issue Hotspot On-Chain</p>
+            <p className="text-sm font-medium text-content">
+              {lookupData?.onchain?.issued ? 'Hotspot Already Issued' : 'Step 1: Issue Hotspot On-Chain'}
+            </p>
             <p className="text-xs text-content-tertiary">
               Connect your wallet and sign a transaction to issue this Hotspot as a compressed NFT on Solana.
             </p>
@@ -648,53 +673,12 @@ function OnboardPanel({ ble }) {
               {connected && (
                 <button
                   onClick={handleIssue}
-                  disabled={loading}
+                  disabled={loading || (!onboardMode && !lookupData?.maker?.dc_sufficient)}
                   className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
                 >
                   {loading ? 'Issuing...' : 'Issue Hotspot'}
                 </button>
               )}
-            </div>
-          </div>
-        )}
-
-        {/* Step: Mode select (only when maker has insufficient DC) */}
-        {step === 'mode_select' && (
-          <div className="space-y-3">
-            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-              <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                Hotspot issued on-chain
-              </p>
-            </div>
-            <p className="text-sm font-medium text-content">Step 2: Choose Onboarding Mode</p>
-            <p className="text-xs text-content-tertiary">
-              This Hotspot's maker does not have sufficient DC. Choose how to onboard:
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <button
-                onClick={() => { setOnboardMode('full'); setStep('location'); }}
-                className="rounded-lg border border-border p-4 text-left hover:border-accent transition space-y-1"
-              >
-                <p className="text-sm font-medium text-content">Full Onboard</p>
-                <p className="text-xs text-content-tertiary">
-                  Proof of Coverage eligible. You pay the DC fee.
-                </p>
-                <p className="text-xs font-mono text-content-secondary">
-                  ~{ONBOARD_SOL_COST} SOL + {FULL_ONBOARD_DC_COST.toLocaleString()} DC
-                </p>
-              </button>
-              <button
-                onClick={() => { setOnboardMode('data_only'); setStep('location'); }}
-                className="rounded-lg border border-border p-4 text-left hover:border-accent transition space-y-1"
-              >
-                <p className="text-sm font-medium text-content">Data-Only</p>
-                <p className="text-xs text-content-tertiary">
-                  Data transfer only, no Proof of Coverage.
-                </p>
-                <p className="text-xs font-mono text-content-secondary">
-                  ~{ONBOARD_SOL_COST} SOL + {DATA_ONLY_DC_COST.toLocaleString()} DC
-                </p>
-              </button>
             </div>
           </div>
         )}
@@ -770,9 +754,7 @@ function OnboardPanel({ ble }) {
               <p className="font-medium text-content">Onboarding costs</p>
               <div className="flex justify-between text-content-secondary">
                 <span>Mode</span>
-                <span className="font-mono">
-                  {onboardMode === 'full' ? 'Full (PoC eligible)' : 'Data-Only'}
-                </span>
+                <span className="font-mono">{onboardMode === 'full' ? 'Full (PoC eligible)' : 'Data-Only'}</span>
               </div>
               <div className="flex justify-between text-content-secondary">
                 <span>Estimated cost</span>
