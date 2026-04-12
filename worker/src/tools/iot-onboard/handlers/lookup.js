@@ -3,10 +3,9 @@ import { PublicKey } from "@solana/web3.js";
 import { jsonResponse } from "../../../lib/response.js";
 import { keyToAssetKey, iotInfoKey, ataAddress, DC_MINT } from "../../../lib/helium-solana.js";
 import { fetchAccount } from "../../hotspot-claimer/services/common.js";
+import { getOnboardFees } from "../services/fees.js";
 
 const ONBOARDING_API = "https://onboarding.dewi.org/api/v3/hotspots";
-// Maker must have at least 4M DC to cover full onboarding
-const FULL_ONBOARD_DC_THRESHOLD = 4_000_000;
 
 /**
  * POST /lookup
@@ -31,16 +30,24 @@ export async function handleLookup(request, env) {
   }
 
   try {
-    // Run onboarding server lookup and on-chain checks in parallel
-    const [makerResult, onchainResult] = await Promise.all([
+    // Run onboarding server lookup, on-chain checks, and fee fetch in parallel
+    const [makerResult, onchainResult, fees] = await Promise.all([
       onboarding_key ? fetchMakerInfo(onboarding_key, env) : null,
       gateway_pubkey ? fetchOnchainStatus(gateway_pubkey, env) : null,
+      getOnboardFees(env),
     ]);
+
+    // Compare maker DC balance against full onboarding cost (base + location)
+    if (makerResult) {
+      const fullCost = fees.full.base + fees.full.location;
+      makerResult.dc_sufficient = BigInt(makerResult.dc_balance) >= BigInt(fullCost);
+    }
 
     return jsonResponse({
       maker: makerResult,
       onchain: onchainResult || { issued: false, onboarded: false, has_location: false },
-      hotspot_type: makerResult?.dc_sufficient ? "full" : "data_only",
+      suggested_mode: makerResult?.dc_sufficient ? "full" : "data_only",
+      fees,
     });
   } catch (err) {
     console.error("Lookup error:", err.message, err.stack);
@@ -89,7 +96,7 @@ async function fetchMakerInfo(onboardingKey, env) {
       name: maker.name || null,
       address: maker.address || null,
       dc_balance: dcBalance.toString(),
-      dc_sufficient: dcBalance >= BigInt(FULL_ONBOARD_DC_THRESHOLD),
+      dc_sufficient: false, // set dynamically in handleLookup using on-chain fees
     };
   } catch (err) {
     clearTimeout(timeout);

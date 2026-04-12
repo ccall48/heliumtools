@@ -11,7 +11,7 @@ import { handleHotspotMapRequest } from "./tools/hotspot-map/index.js";
 import { handleMultiGatewayRequest } from "./tools/multi-gateway/index.js";
 import { handleDcMintRequest } from "./tools/dc-mint/index.js";
 import { handleL1MigrationRequest } from "./tools/l1-migration/index.js";
-import { handleIotOnboardRequest } from "./tools/iot-onboard/index.js";
+import { handleIotOnboardRequest, refreshOnboardFees } from "./tools/iot-onboard/index.js";
 import { refreshOuiCache } from "./tools/multi-gateway/oui-cache.js";
 
 const routes = [
@@ -52,6 +52,7 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runOuiNotifierDaily(env));
     ctx.waitUntil(runDcPurchaseScheduled(env, ctx));
+    ctx.waitUntil(refreshOnboardFees(env));
     // OUI data changes infrequently — refresh once daily at midnight UTC
     const hour = new Date(event.scheduledTime).getUTCHours();
     if (hour === 0) ctx.waitUntil(refreshOuiCache(env));

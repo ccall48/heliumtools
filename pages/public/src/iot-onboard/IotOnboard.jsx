@@ -31,10 +31,21 @@ import {
 const BASEMAP_LIGHT = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
 const BASEMAP_DARK = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
-// Onboarding cost constants
 const ONBOARD_SOL_COST = 0.004;
-const DATA_ONLY_DC_COST = 100_000;      // 100K DC ($1) for data-only
-const FULL_ONBOARD_DC_COST = 4_000_000; // 4M DC ($40) for full PoC
+
+// Fallback fees (used while fetching from chain)
+const DEFAULT_FEES = {
+  full: { base: 1_000_000, location: 100_000 },
+  data_only: { base: 50_000, location: 50_000 },
+};
+
+function dcToUsd(dc) { return (dc / 100_000).toFixed(2); }
+
+function formatDcCost(mode, fees) {
+  const f = mode === 'full' ? fees.full : fees.data_only;
+  const total = f.base + f.location;
+  return `${total.toLocaleString()} DC ($${dcToUsd(total)})`;
+}
 
 const WIFI_STATUS_MAP = {
   'init':        { text: 'Initializing...', tone: 'loading' },
@@ -67,34 +78,31 @@ function BleNotSupported() {
   );
 }
 
-function ActivityLog({ lines }) {
-  const [displayed, setDisplayed] = useState(null);
-  const [animating, setAnimating] = useState(false);
-  const prevRef = useRef(null);
+const PROGRESS_MILESTONES = new Set([
+  'GATT connected', 'Service discovered',
+  'Public key: OK', 'Onboarding key: OK',
+  'Diagnostics: OK', 'Diagnostics: not available',
+  'Ethernet status: OK', 'Ethernet status: not available',
+  'WiFi SSID: OK', 'WiFi SSID: not available',
+  'Ready',
+]);
+const TOTAL_MILESTONES = 7; // GATT + service + 5 reads (OK or not available)
 
-  useEffect(() => {
-    if (lines.length === 0) { setDisplayed(null); return; }
-    const latest = lines[lines.length - 1];
-    if (latest === displayed) return;
-    prevRef.current = displayed;
-    setAnimating(true);
-    setDisplayed(latest);
-    const timer = setTimeout(() => setAnimating(false), 300);
-    return () => clearTimeout(timer);
-  }, [lines, displayed]);
-
-  if (!displayed) return null;
+function ConnectionProgress({ lines }) {
+  if (lines.length === 0) return null;
+  const completed = lines.filter(l => PROGRESS_MILESTONES.has(l)).length;
+  const pct = Math.min((completed / TOTAL_MILESTONES) * 100, 100);
+  const latest = lines[lines.length - 1];
   return (
-    <div className="mx-auto max-w-md rounded-lg border border-border bg-surface-inset px-4 h-8 overflow-hidden relative">
-      {prevRef.current && animating && (
-        <p className="absolute inset-x-4 flex items-center h-8 text-xs font-mono text-content-tertiary animate-[flipOut_0.3s_ease-in_forwards]">
-          <span className="select-none mr-1.5">{'>'}</span>
-          {prevRef.current}
-        </p>
-      )}
-      <p className={`flex items-center h-8 text-xs font-mono text-content-secondary ${animating ? 'animate-[flipIn_0.3s_ease-out]' : ''}`}>
-        <span className="text-content-tertiary select-none mr-1.5">{'>'}</span>
-        {displayed}
+    <div className="mx-auto max-w-md space-y-2">
+      <div className="h-1.5 rounded-full bg-surface-inset overflow-hidden">
+        <div
+          className="h-full rounded-full bg-accent transition-all duration-300 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="text-xs font-mono text-content-tertiary text-center">
+        {latest}
       </p>
     </div>
   );
@@ -102,34 +110,45 @@ function ActivityLog({ lines }) {
 
 function StartPage({ onScan, scanning, activity }) {
   return (
-    <div className="rounded-xl border border-border bg-surface-raised p-8 text-center space-y-6">
-      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400">
-        <SignalIcon className="h-8 w-8" />
+    <div className="space-y-6">
+      <div className="rounded-xl border border-border bg-surface-raised p-8 text-center space-y-6">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400">
+          <SignalIcon className="h-8 w-8" />
+        </div>
+        <div>
+          <h2 className="text-xl font-display font-semibold text-content mb-2">
+            Connect to Hotspot
+          </h2>
+          <p className="text-content-secondary max-w-md mx-auto">
+            Put your Helium IoT Hotspot in Bluetooth pairing mode, then click
+            the button below. Your browser will show a device picker.
+          </p>
+        </div>
+        <button
+          onClick={onScan}
+          disabled={scanning}
+          className="inline-flex items-center gap-2 rounded-lg bg-accent px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {scanning ? (
+            <>
+              <ArrowPathIcon className="h-4 w-4 animate-spin" />
+              {scanning === 'connecting' ? 'Connecting...' : 'Scanning...'}
+            </>
+          ) : (
+            'Pair Hotspot'
+          )}
+        </button>
+        <ConnectionProgress lines={activity} />
       </div>
-      <div>
-        <h2 className="text-xl font-display font-semibold text-content mb-2">
-          Connect to Hotspot
-        </h2>
-        <p className="text-content-secondary max-w-md mx-auto">
-          Put your Helium IoT Hotspot in Bluetooth pairing mode, then click
-          the button below. Your browser will show a device picker.
-        </p>
+      {/* Journey preview */}
+      <div className="flex items-center justify-center gap-6 text-xs text-content-tertiary">
+        {['Pair via Bluetooth', 'Configure WiFi', 'Onboard to Helium'].map((label, i) => (
+          <div key={label} className="flex items-center gap-2">
+            {i > 0 && <div className="h-px w-6 bg-border" />}
+            <span className="font-mono">{label}</span>
+          </div>
+        ))}
       </div>
-      <button
-        onClick={onScan}
-        disabled={scanning}
-        className="inline-flex items-center gap-2 rounded-lg bg-accent px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {scanning ? (
-          <>
-            <ArrowPathIcon className="h-4 w-4 animate-spin" />
-            {scanning === 'connecting' ? 'Connecting...' : 'Scanning...'}
-          </>
-        ) : (
-          'Pair Hotspot'
-        )}
-      </button>
-      <ActivityLog lines={activity} />
     </div>
   );
 }
@@ -381,6 +400,9 @@ function OnboardPanel({ ble }) {
   const { connection } = useConnection();
   const isDark = useDarkMode();
 
+  // Fees (from chain, cached in KV)
+  const [fees, setFees] = useState(DEFAULT_FEES);
+
   // Lookup state
   const [lookupData, setLookupData] = useState(null);
   const [lookupLoading, setLookupLoading] = useState(false);
@@ -412,6 +434,7 @@ function OnboardPanel({ ble }) {
       .then((data) => {
         if (cancelled) return;
         setLookupData(data);
+        if (data.fees) setFees(data.fees);
 
         // Determine initial step from on-chain status
         const onchain = data.onchain;
@@ -419,7 +442,7 @@ function OnboardPanel({ ble }) {
           setStep('done');
         } else if (onchain.onboarded && !onchain.has_location) {
           setStep('location');
-          setOnboardMode(data.hotspot_type === 'full' ? 'full' : 'data_only');
+          setOnboardMode(data.suggested_mode === 'full' ? 'full' : 'data_only');
         } else if (onchain.issued) {
           if (data.maker?.dc_sufficient) setOnboardMode('full');
           setStep('location');
@@ -627,8 +650,8 @@ function OnboardPanel({ ble }) {
             <p className="text-xs font-mono uppercase tracking-widest text-content-tertiary">Onboarding Mode</p>
             <div className="grid gap-3 sm:grid-cols-2">
               {[
-                { key: 'full', title: 'Full Onboard (PoC)', desc: 'Earns IOT rewards for wireless coverage.', cost: `${FULL_ONBOARD_DC_COST.toLocaleString()} DC` },
-                { key: 'data_only', title: 'Data-Only', desc: 'Eligible for data transfer rewards only.', cost: `${DATA_ONLY_DC_COST.toLocaleString()} DC` },
+                { key: 'full', title: 'Full Onboard (PoC)', desc: 'Earns IOT rewards for wireless coverage.', cost: `${(fees.full.base + fees.full.location).toLocaleString()} DC ($${dcToUsd(fees.full.base + fees.full.location)})` },
+                { key: 'data_only', title: 'Data-Only', desc: 'Eligible for data transfer rewards only.', cost: `${(fees.data_only.base + fees.data_only.location).toLocaleString()} DC ($${dcToUsd(fees.data_only.base + fees.data_only.location)})` },
               ].map(({ key, title, desc, cost }) => (
                 <button
                   key={key}
@@ -762,7 +785,7 @@ function OnboardPanel({ ble }) {
                   ~{ONBOARD_SOL_COST} SOL
                   {lookupData?.maker?.dc_sufficient
                     ? ' (maker pays DC)'
-                    : ` + ${(onboardMode === 'full' ? FULL_ONBOARD_DC_COST : DATA_ONLY_DC_COST).toLocaleString()} DC`
+                    : ` + ${formatDcCost(onboardMode, fees)}`
                   }
                 </span>
               </div>
@@ -783,22 +806,28 @@ function OnboardPanel({ ble }) {
 
         {/* Step: Done */}
         {step === 'done' && (
-          <div className="space-y-3">
-            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-              <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                Hotspot onboarded successfully
-              </p>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-center gap-3">
+              <CheckCircleIcon className="h-6 w-6 text-emerald-500 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                  Hotspot onboarded successfully
+                </p>
+                <p className="text-xs text-emerald-600/70 dark:text-emerald-400/70 mt-0.5">
+                  Your Hotspot is now registered on the Helium IoT network.
+                </p>
+              </div>
             </div>
-            <div className="space-y-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               {txSignature && (
                 <a
                   href={`https://solscan.io/tx/${txSignature}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 text-sm text-accent-text hover:underline"
+                  className="flex items-center gap-2.5 rounded-lg border border-border p-3 text-sm text-content-secondary hover:border-accent hover:text-accent-text transition"
                 >
                   <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0" />
-                  View transaction on Solscan
+                  View on Solscan
                 </a>
               )}
               {ble.pubkey && (
@@ -807,28 +836,28 @@ function OnboardPanel({ ble }) {
                     href={`https://world.helium.com/network/iot/hotspot/${ble.pubkey}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-sm text-accent-text hover:underline"
+                    className="flex items-center gap-2.5 rounded-lg border border-border p-3 text-sm text-content-secondary hover:border-accent hover:text-accent-text transition"
                   >
                     <GlobeAltIcon className="h-4 w-4 shrink-0" />
-                    View Hotspot on Helium World
+                    Helium World
                   </a>
                   <a
                     href={`/hotspot-claimer?mode=hotspot&key=${encodeURIComponent(ble.pubkey)}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-sm text-accent-text hover:underline"
+                    className="flex items-center gap-2.5 rounded-lg border border-border p-3 text-sm text-content-secondary hover:border-accent hover:text-accent-text transition"
                   >
                     <BoltIcon className="h-4 w-4 shrink-0" />
-                    Claim rewards in Reward Claimer
+                    Claim Rewards
                   </a>
                   <a
                     href={`/hotspot-map?keys=${encodeURIComponent(ble.pubkey)}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-sm text-accent-text hover:underline"
+                    className="flex items-center gap-2.5 rounded-lg border border-border p-3 text-sm text-content-secondary hover:border-accent hover:text-accent-text transition"
                   >
                     <MapPinIcon className="h-4 w-4 shrink-0" />
-                    View on Hotspot Map
+                    Hotspot Map
                   </a>
                 </>
               )}
@@ -892,23 +921,30 @@ export default function IotOnboard() {
 
         {ble.status === 'connected' && (
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-display font-semibold text-content">
-                  {ble.hotspotName || ble.device?.name || 'Helium Hotspot'}
-                </h2>
-                <p className="text-sm font-mono text-content-tertiary">
-                  {ble.device?.name || 'Helium Hotspot'}
-                </p>
+            {/* Connected header — compact bar with Hotspot identity */}
+            <div className="rounded-xl border border-border bg-surface-raised px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400">
+                  <SignalIcon className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-display font-semibold text-content leading-tight">
+                    {ble.hotspotName || ble.device?.name || 'Helium Hotspot'}
+                  </h2>
+                  <p className="text-xs font-mono text-content-tertiary">
+                    {ble.device?.name || 'Connected via Bluetooth'}
+                  </p>
+                </div>
               </div>
               <button
                 onClick={ble.disconnect}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-content-secondary hover:bg-surface-inset transition"
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-content-secondary hover:bg-surface-inset transition"
               >
                 Disconnect
               </button>
             </div>
 
+            {/* Device & Network — side by side */}
             <div className="grid gap-6 lg:grid-cols-2">
               <DiagnosticsPanel
                 pubkey={ble.pubkey}
@@ -929,6 +965,7 @@ export default function IotOnboard() {
               />
             </div>
 
+            {/* On-chain onboarding — full width below */}
             <OnboardPanel ble={ble} />
           </div>
         )}

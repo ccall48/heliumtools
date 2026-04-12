@@ -4,6 +4,13 @@ const API_BASE = import.meta.env.DEV
   ? "/api/iot-onboard"
   : "https://api.heliumtools.org/iot-onboard";
 
+export async function fetchOnboardFees() {
+  const res = await fetch(`${API_BASE}/fees`);
+  const data = await parseJson(res);
+  if (!res.ok) return null;
+  return data;
+}
+
 export async function lookupHotspot(onboardingKey, gatewayPubkey) {
   const res = await fetch(`${API_BASE}/lookup`, {
     method: "POST",
