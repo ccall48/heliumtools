@@ -601,7 +601,7 @@ function GatewayDetail({ mac, publicKey, latestPacket, ouiLookup, onClose }) {
   const [loading, setLoading] = useState(true);
   const [visibleTypes, setVisibleTypes] = useState(() =>
     Object.fromEntries(
-      ALL_FRAME_TYPES.map((t) => [t, t !== "JoinRequest" && t !== "JoinAccept"]),
+      ALL_FRAME_TYPES.map((t) => [t, t !== "JoinRequest"]),
     ),
   );
 
