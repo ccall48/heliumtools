@@ -7,10 +7,11 @@ const ONBOARDING_API = "https://onboarding.dewi.org/api/v3";
 
 /**
  * POST /onboard
- * Body: { owner, gateway_pubkey, location, elevation, gain }
- *   location: H3 resolution-12 cell index as hex string (optional)
- *   elevation: altitude in meters (optional)
- *   gain: antenna gain in dBi × 10 (optional)
+ * Body: { owner, gateway_pubkey, user_pays?, location?, elevation?, gain? }
+ *   user_pays?: when true, owner pays DC; otherwise the maker covers DC and SOL
+ *   location?: H3 resolution-12 cell index as hex string
+ *   elevation?: altitude in meters
+ *   gain?: antenna gain in dBi × 10
  *
  * Forwards to the Helium onboarding server which builds the appropriate
  * Solana transactions based on the maker's configuration (full PoC vs data-only).

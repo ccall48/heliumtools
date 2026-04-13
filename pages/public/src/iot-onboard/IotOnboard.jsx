@@ -524,7 +524,8 @@ function OnboardPanel({ ble }) {
       .catch((err) => {
         if (cancelled) return;
         setLookupError(err.message);
-        setStep('issue'); // Fall through to issue even if lookup fails
+        setOnboardMode('data_only'); // Default so Issue button isn't stranded
+        setStep('issue');
       })
       .finally(() => { if (!cancelled) setLookupLoading(false); });
 

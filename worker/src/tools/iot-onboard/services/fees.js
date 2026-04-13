@@ -4,7 +4,7 @@
  * Reads SubDaoV0.onboarding_dc_fee, SubDaoV0.onboarding_data_only_dc_fee
  * and RewardableEntityConfigV0 IotConfig location staking fees from Solana.
  *
- * Values are cached in KV with a 6-hour TTL (refreshed by the scheduled cron).
+ * Values are cached in KV with a 7-hour TTL (refreshed by the scheduled cron).
  * Falls back to HIP-based defaults if RPC is unavailable.
  */
 import { Connection } from "@solana/web3.js";
